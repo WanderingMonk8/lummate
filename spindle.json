@@ -1,0 +1,12 @@
+{
+  "version": "0.1.0",
+  "name": "Lummate",
+  "identifier": "lummate",
+  "author": "WanderingMonk8",
+  "github": "https://github.com/WanderingMonk8/lummate",
+  "homepage": "https://github.com/WanderingMonk8/lummate",
+  "description": "Semantic tactile roleplay bridge for Lumiverse and XToys.",
+  "permissions": ["generation", "chat_mutation", "cors_proxy"],
+  "entry_backend": "dist/backend.js",
+  "entry_frontend": "dist/frontend.js"
+}

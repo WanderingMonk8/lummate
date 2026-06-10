@@ -12,7 +12,16 @@ The project is currently focused on the Lumiverse-side architecture for:
 
 ## Current Status
 
-This repository is in the design and planning stage.
+This repository is now in early implementation.
+
+The Phase 1 Lumiverse Spindle scaffold is working locally and has been verified in Lumiverse far enough to confirm:
+
+- the extension installs successfully
+- the frontend loads successfully
+- a custom per-message action button can be injected into the native message action row
+- frontend/backend messaging and persisted session state plumbing are working
+
+The project is still pre-parser and pre-XToys-integration, but the extension shell is now active and testable.
 
 The main working documents are:
 
@@ -31,7 +40,8 @@ The planned extension will:
 
 ## Near-Term Goals
 
-- scaffold the Spindle extension structure
-- implement a first vertical slice of the Lumiverse frontend/backend flow
-- add parser connection settings, participant profile caching, and action calibration
+- expand the working scaffold into parser-aware message actions
+- add parser connection settings and settings UI
+- implement semantic beat parsing stubs and message plan generation
+- add participant profile caching and action calibration plumbing
 - integrate XToys webhook command dispatch

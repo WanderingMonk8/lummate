@@ -1,0 +1,14 @@
+{
+  "name": "lummate",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "cmd /c npx tsc -p tsconfig.build.json",
+    "typecheck": "cmd /c npx tsc --noEmit"
+  },
+  "devDependencies": {
+    "lumiverse-spindle-types": "^0.5.23",
+    "typescript": "^5.6.3"
+  }
+}

@@ -1,5 +1,6 @@
 export type PlaybackMode = 'once' | 'loop' | 'hold'
 
+export type ParticipantKind = 'character' | 'persona'
 export type ResponseMode = 'lead' | 'meet' | 'withdraw' | 'mutual'
 export type ContinuityVerdict = 'continue' | 'progress' | 'modify' | 'replace' | 'stop'
 export type TransitionMode = 'replace' | 'modulate' | 'blend'
@@ -45,12 +46,20 @@ export interface MechanicalAxes {
 }
 
 export interface ParticipantProfile {
+  participantKind: ParticipantKind
   participantId: string
   displayName: string
   sourceFingerprint: string | null
+  sourceUpdatedAt: number | null
+  sourcePreview: string
   mechanicalAxes: MechanicalAxes
   userOverrides: Partial<MechanicalAxes>
   updatedAt: string | null
+}
+
+export interface ParticipantProfileBundle {
+  userProfile: ParticipantProfile | null
+  characterProfiles: ParticipantProfile[]
 }
 
 export interface ParticipantState {
@@ -172,6 +181,7 @@ export interface UserSettings {
 
 export interface SessionState {
   activeChatId: string | null
+  activeCharacterId: string | null
   activeMessageId: string | null
   lastPlayedMessageId: string | null
   lastUpdatedAt: string | null
@@ -188,6 +198,7 @@ export interface BootstrapPayload {
 export interface SettingsBootstrapPayload {
   settings: UserSettings
   availableConnections: ConnectionProfileSummary[]
+  participantProfiles: ParticipantProfileBundle
 }
 
 export interface SettingsSavePayload {
@@ -196,24 +207,34 @@ export interface SettingsSavePayload {
 
 export interface PlayTogglePayload {
   chatId: string | null
+  characterId: string | null
   messageId: string
   playbackModeOverride?: PlaybackMode | null
 }
 
 export interface ChatScopedPayload {
   chatId: string | null
+  characterId: string | null
 }
 
 export interface RegeneratePayload {
   chatId: string | null
+  characterId: string | null
   messageId: string
   playbackModeOverride?: PlaybackMode | null
 }
 
 export interface SetPlaybackModePayload {
   chatId: string | null
+  characterId: string | null
   messageId: string
   playbackMode: PlaybackMode
+}
+
+export interface RegenerateParticipantProfilePayload {
+  chatId: string | null
+  characterId: string | null
+  participantKind: ParticipantKind
 }
 
 export type FrontendToBackendMessage =
@@ -222,14 +243,16 @@ export type FrontendToBackendMessage =
   | { type: 'lummate.phase1.play_toggle'; payload: PlayTogglePayload }
   | { type: 'lummate.phase3.regenerate'; payload: RegeneratePayload }
   | { type: 'lummate.phase3.set_playback_mode'; payload: SetPlaybackModePayload }
-  | { type: 'lummate.settings.bootstrap' }
-  | { type: 'lummate.settings.save'; payload: SettingsSavePayload }
+  | { type: 'lummate.phase5.regenerate_profile'; payload: RegenerateParticipantProfilePayload }
+  | { type: 'lummate.settings.bootstrap'; payload: ChatScopedPayload }
+  | { type: 'lummate.settings.save'; payload: SettingsSavePayload & { context: ChatScopedPayload } }
 
 export type BackendToFrontendMessage =
   | { type: 'lummate.phase1.bootstrap_result'; payload: BootstrapPayload }
   | { type: 'lummate.phase1.session_state'; payload: BootstrapPayload }
   | { type: 'lummate.settings.bootstrap_result'; payload: SettingsBootstrapPayload }
   | { type: 'lummate.settings.save_result'; payload: SettingsBootstrapPayload }
+  | { type: 'lummate.phase5.profile_result'; payload: ParticipantProfileBundle }
   | { type: 'lummate.phase1.error'; message: string }
 
 export const DEFAULT_MECHANICAL_AXES: MechanicalAxes = {
@@ -307,6 +330,7 @@ export const DEFAULT_HELD_STATE: HeldState = {
 
 export const DEFAULT_SESSION_STATE: SessionState = {
   activeChatId: null,
+  activeCharacterId: null,
   activeMessageId: null,
   lastPlayedMessageId: null,
   lastUpdatedAt: null,

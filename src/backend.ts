@@ -8,11 +8,13 @@ import type {
   FrontendToBackendMessage,
   MessagePlan,
   PlaybackMode,
+  ParticipantProfileBundle,
   ResolvedBeat,
   SemanticBeat,
   SessionState,
   UserSettings,
 } from './shared/contracts'
+import { ensureParticipantProfileBundle } from './backend/participant-profiles'
 import { readUserSettings, writeUserSettings } from './backend/storage'
 import { DEFAULT_RUNTIME_PLAN_BUFFER, DEFAULT_SESSION_STATE } from './shared/contracts'
 
@@ -31,6 +33,7 @@ function cloneDefaultSessionState(): SessionState {
   return {
     ...DEFAULT_SESSION_STATE,
     activeChatId: null,
+    activeCharacterId: null,
     parserSession: {
       ...DEFAULT_SESSION_STATE.parserSession,
       continuityMemory: {},
@@ -53,26 +56,39 @@ function getRuntimeSession(userId: string): SessionState {
   return created
 }
 
-function resetRuntimeSession(userId: string, chatId: string | null): SessionState {
+function resetRuntimeSession(
+  userId: string,
+  chatId: string | null,
+  characterId: string | null,
+): SessionState {
   const next = cloneDefaultSessionState()
   next.activeChatId = chatId
+  next.activeCharacterId = characterId
   runtimeSessions.set(userId, next)
   activeChatIds.set(userId, chatId)
   return next
 }
 
-function syncSessionToChat(userId: string, chatId: string | null): SessionState {
+function syncSessionToChat(
+  userId: string,
+  chatId: string | null,
+  characterId: string | null,
+): SessionState {
   const currentChatId = activeChatIds.get(userId) ?? null
   if (currentChatId !== chatId) {
-    return resetRuntimeSession(userId, chatId)
+    return resetRuntimeSession(userId, chatId, characterId)
   }
 
-  return getRuntimeSession(userId)
+  const session = getRuntimeSession(userId)
+  if (session.activeCharacterId !== characterId) {
+    session.activeCharacterId = characterId
+  }
+  return session
 }
 
-async function buildBootstrap(userId: string, chatId: string | null) {
+async function buildBootstrap(userId: string, chatId: string | null, characterId: string | null) {
   const settings = await readUserSettings(spindle, userId)
-  const session = syncSessionToChat(userId, chatId)
+  const session = syncSessionToChat(userId, chatId, characterId)
 
   return { settings, session }
 }
@@ -104,13 +120,47 @@ async function listAvailableConnections(userId: string): Promise<ConnectionProfi
     })
 }
 
-async function buildSettingsBootstrap(userId: string) {
-  const [settings, availableConnections] = await Promise.all([
+async function buildSettingsBootstrap(
+  userId: string,
+  chatId: string | null,
+  characterId: string | null,
+): Promise<{
+  settings: UserSettings
+  availableConnections: ConnectionProfileSummary[]
+  participantProfiles: ParticipantProfileBundle
+}> {
+  const [settings, availableConnections, participantProfiles] = await Promise.all([
     readUserSettings(spindle, userId),
     listAvailableConnections(userId),
+    getParticipantProfilesSafely(userId, chatId, characterId),
   ])
 
-  return { settings, availableConnections }
+  return { settings, availableConnections, participantProfiles }
+}
+
+async function getParticipantProfilesSafely(
+  userId: string,
+  chatId: string | null,
+  characterId: string | null,
+  forceOptions?: {
+    forceUserRegenerate?: boolean
+    forceCharacterRegenerate?: boolean
+  },
+): Promise<ParticipantProfileBundle> {
+  try {
+    return await ensureParticipantProfileBundle(spindle, userId, {
+      chatId,
+      characterId,
+      ...forceOptions,
+    })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    spindle.log.warn(`Lummate profile derivation unavailable: ${message}`)
+    return {
+      userProfile: null,
+      characterProfiles: [],
+    }
+  }
 }
 
 function buildUpdatedSettings(current: UserSettings, incoming: UserSettings): UserSettings {
@@ -256,10 +306,14 @@ function clearHeldAndContinuity(session: SessionState): SessionState {
 async function buildMessagePlan(
   chatId: string,
   messageId: string,
+  userId: string,
+  characterId: string | null,
   settings: UserSettings,
   session: SessionState,
   playbackModeOverride: PlaybackMode | null,
 ): Promise<MessagePlan> {
+  await getParticipantProfilesSafely(userId, chatId, characterId)
+
   const messages = await spindle.chat.getMessages(chatId)
   const selected = messages.find((message) => message.id === messageId)
 
@@ -333,7 +387,11 @@ async function handleFrontendMessage(
   try {
     switch (payload.type) {
       case 'lummate.phase1.bootstrap': {
-        const bootstrap = await buildBootstrap(userId, payload.payload.chatId)
+        const bootstrap = await buildBootstrap(
+          userId,
+          payload.payload.chatId,
+          payload.payload.characterId,
+        )
         sendToUser(
           {
             type: 'lummate.phase1.bootstrap_result',
@@ -344,7 +402,11 @@ async function handleFrontendMessage(
         return
       }
       case 'lummate.phase1.chat_changed': {
-        const bootstrap = await buildBootstrap(userId, payload.payload.chatId)
+        const bootstrap = await buildBootstrap(
+          userId,
+          payload.payload.chatId,
+          payload.payload.characterId,
+        )
         sendToUser(
           {
             type: 'lummate.phase1.session_state',
@@ -355,7 +417,11 @@ async function handleFrontendMessage(
         return
       }
       case 'lummate.phase1.play_toggle': {
-        const current = syncSessionToChat(userId, payload.payload.chatId)
+        const current = syncSessionToChat(
+          userId,
+          payload.payload.chatId,
+          payload.payload.characterId,
+        )
         const nextActiveMessageId =
           current.activeMessageId === payload.payload.messageId
             ? null
@@ -368,6 +434,8 @@ async function handleFrontendMessage(
           const nextPlan = await buildMessagePlan(
             payload.payload.chatId,
             payload.payload.messageId,
+            userId,
+            payload.payload.characterId,
             settings,
             current,
             payload.payload.playbackModeOverride ?? null,
@@ -380,6 +448,7 @@ async function handleFrontendMessage(
         const nextSession: SessionState = {
           ...current,
           activeChatId: payload.payload.chatId,
+          activeCharacterId: payload.payload.characterId,
           activeMessageId: nextActiveMessageId,
           lastPlayedMessageId: payload.payload.messageId,
           lastUpdatedAt: new Date().toISOString(),
@@ -407,7 +476,11 @@ async function handleFrontendMessage(
         runtimeSessions.set(userId, nextSession)
         activeChatIds.set(userId, payload.payload.chatId)
 
-        const bootstrap = await buildBootstrap(userId, payload.payload.chatId)
+        const bootstrap = await buildBootstrap(
+          userId,
+          payload.payload.chatId,
+          payload.payload.characterId,
+        )
         sendToUser(
           {
             type: 'lummate.phase1.session_state',
@@ -422,11 +495,17 @@ async function handleFrontendMessage(
           throw new Error('Cannot regenerate a plan without an active chat')
         }
 
-        const current = syncSessionToChat(userId, payload.payload.chatId)
+        const current = syncSessionToChat(
+          userId,
+          payload.payload.chatId,
+          payload.payload.characterId,
+        )
         const settings = await readUserSettings(spindle, userId)
         const regeneratedPlan = await buildMessagePlan(
           payload.payload.chatId,
           payload.payload.messageId,
+          userId,
+          payload.payload.characterId,
           settings,
           current,
           payload.payload.playbackModeOverride ?? null,
@@ -435,6 +514,7 @@ async function handleFrontendMessage(
         const nextSession: SessionState = {
           ...current,
           activeChatId: payload.payload.chatId,
+          activeCharacterId: payload.payload.characterId,
           lastUpdatedAt: new Date().toISOString(),
           runtimePlans: {
             ...current.runtimePlans,
@@ -445,7 +525,11 @@ async function handleFrontendMessage(
         runtimeSessions.set(userId, nextSession)
         activeChatIds.set(userId, payload.payload.chatId)
 
-        const bootstrap = await buildBootstrap(userId, payload.payload.chatId)
+        const bootstrap = await buildBootstrap(
+          userId,
+          payload.payload.chatId,
+          payload.payload.characterId,
+        )
         sendToUser(
           {
             type: 'lummate.phase1.session_state',
@@ -456,11 +540,16 @@ async function handleFrontendMessage(
         return
       }
       case 'lummate.phase3.set_playback_mode': {
-        const current = syncSessionToChat(userId, payload.payload.chatId)
+        const current = syncSessionToChat(
+          userId,
+          payload.payload.chatId,
+          payload.payload.characterId,
+        )
         const currentPlan = current.runtimePlans.currentPlan
 
         const nextSession: SessionState = {
           ...current,
+          activeCharacterId: payload.payload.characterId,
           lastUpdatedAt: new Date().toISOString(),
           runtimePlans: {
             ...current.runtimePlans,
@@ -477,7 +566,11 @@ async function handleFrontendMessage(
         runtimeSessions.set(userId, nextSession)
         activeChatIds.set(userId, payload.payload.chatId)
 
-        const bootstrap = await buildBootstrap(userId, payload.payload.chatId)
+        const bootstrap = await buildBootstrap(
+          userId,
+          payload.payload.chatId,
+          payload.payload.characterId,
+        )
         sendToUser(
           {
             type: 'lummate.phase1.session_state',
@@ -487,12 +580,36 @@ async function handleFrontendMessage(
         )
         return
       }
+      case 'lummate.phase5.regenerate_profile': {
+        const participantProfiles = await getParticipantProfilesSafely(
+          userId,
+          payload.payload.chatId,
+          payload.payload.characterId,
+          {
+            forceUserRegenerate: payload.payload.participantKind === 'persona',
+            forceCharacterRegenerate: payload.payload.participantKind === 'character',
+          },
+        )
+
+        sendToUser(
+          {
+            type: 'lummate.phase5.profile_result',
+            payload: participantProfiles,
+          },
+          userId,
+        )
+        return
+      }
       case 'lummate.settings.bootstrap': {
-        const payload = await buildSettingsBootstrap(userId)
+        const settingsBootstrap = await buildSettingsBootstrap(
+          userId,
+          payload.payload.chatId,
+          payload.payload.characterId,
+        )
         sendToUser(
           {
             type: 'lummate.settings.bootstrap_result',
-            payload,
+            payload: settingsBootstrap,
           },
           userId,
         )
@@ -504,7 +621,11 @@ async function handleFrontendMessage(
 
         await writeUserSettings(spindle, userId, nextSettings)
 
-        const settingsBootstrap = await buildSettingsBootstrap(userId)
+        const settingsBootstrap = await buildSettingsBootstrap(
+          userId,
+          payload.payload.context.chatId,
+          payload.payload.context.characterId,
+        )
         sendToUser(
           {
             type: 'lummate.settings.save_result',
@@ -547,7 +668,7 @@ spindle.on('GENERATION_ENDED', async (payload, userId) => {
   if (!payload.content || payload.error) return
   if ((activeChatIds.get(userId) ?? null) !== payload.chatId) return
 
-  const current = syncSessionToChat(userId, payload.chatId)
+  const current = syncSessionToChat(userId, payload.chatId, getRuntimeSession(userId).activeCharacterId)
   if (!current.parserSession.armed) return
 
   const verdict = evaluateLaterMessage(payload.content)
@@ -622,7 +743,7 @@ spindle.on('GENERATION_ENDED', async (payload, userId) => {
   runtimeSessions.set(userId, nextSession)
   activeChatIds.set(userId, payload.chatId)
 
-  const bootstrap = await buildBootstrap(userId, payload.chatId)
+  const bootstrap = await buildBootstrap(userId, payload.chatId, current.activeCharacterId)
   sendToUser(
     {
       type: 'lummate.phase1.session_state',

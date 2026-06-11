@@ -6,7 +6,7 @@
   "github": "https://github.com/WanderingMonk8/lummate",
   "homepage": "https://github.com/WanderingMonk8/lummate",
   "description": "Semantic tactile roleplay bridge for Lumiverse and XToys.",
-  "permissions": ["generation", "chat_mutation", "cors_proxy"],
+  "permissions": ["generation", "chat_mutation", "cors_proxy", "characters", "personas", "chats"],
   "entry_backend": "dist/backend.js",
   "entry_frontend": "dist/frontend.js"
 }

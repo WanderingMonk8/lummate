@@ -5,11 +5,17 @@ import {
   ALL_ACTION_TYPES,
   DEFAULT_USER_SETTINGS,
   type ActionCalibrationPreset,
+  type ParticipantProfile,
   type XToysActionMappingSettings,
   type UserSettings,
 } from '../shared/contracts'
 
 const SETTINGS_PATH = 'phase1/settings.json'
+const PARTICIPANT_PROFILES_PATH = 'phase5/participant-profiles.json'
+
+interface ParticipantProfileStore {
+  profiles: Record<string, ParticipantProfile>
+}
 
 function buildDefaultActionMappings(): XToysActionMappingSettings[] {
   return ALL_ACTION_TYPES.map((semanticActionType) => ({
@@ -79,6 +85,27 @@ export async function writeUserSettings(
   settings: UserSettings,
 ): Promise<void> {
   await spindle.userStorage.setJson(SETTINGS_PATH, mergeSettings(settings), {
+    indent: 2,
+    userId,
+  })
+}
+
+export async function readParticipantProfileStore(
+  spindle: SpindleAPI,
+  userId: string,
+): Promise<ParticipantProfileStore> {
+  return spindle.userStorage.getJson<ParticipantProfileStore>(PARTICIPANT_PROFILES_PATH, {
+    fallback: { profiles: {} },
+    userId,
+  })
+}
+
+export async function writeParticipantProfileStore(
+  spindle: SpindleAPI,
+  userId: string,
+  store: ParticipantProfileStore,
+): Promise<void> {
+  await spindle.userStorage.setJson(PARTICIPANT_PROFILES_PATH, store, {
     indent: 2,
     userId,
   })

@@ -9,6 +9,8 @@ import type {
   BootstrapPayload,
   MessagePlan,
   PlaybackMode,
+  ParticipantProfile,
+  ParticipantProfileBundle,
   ParserSessionState,
   SettingsBootstrapPayload,
   UserSettings,
@@ -34,6 +36,7 @@ const CALIBRATION_EXECUTION_PROFILES = [
 ] as const
 
 const SHOW_PHASE4_DEBUG = false
+const SHOW_PHASE5_DEBUG = false
 
 const CONTROL_SELECTOR = '.lummate-phase1-control'
 const ACTION_ROW_SELECTORS = [
@@ -163,6 +166,7 @@ export function setup(ctx: SpindleFrontendContext) {
   let openBreakoutMessageId: string | null = null
   let parserSessionState: ParserSessionState | null = null
   let settingsPayload: SettingsBootstrapPayload | null = null
+  let participantProfiles: ParticipantProfileBundle | null = null
   let draftSettings: UserSettings | null = null
   let settingsStatus = 'Loading settings...'
   let settingsSaveInFlight = false
@@ -394,6 +398,58 @@ export function setup(ctx: SpindleFrontendContext) {
       gap: 12px;
       flex-wrap: wrap;
     }
+    .lummate-profile-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 12px;
+    }
+    .lummate-profile-card {
+      border: 1px solid rgba(148, 163, 184, 0.2);
+      border-radius: 14px;
+      padding: 12px;
+      background: rgba(15, 23, 42, 0.28);
+    }
+    .lummate-profile-card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+    .lummate-profile-card-header h4 {
+      margin: 0;
+      font-size: 14px;
+      font-weight: 600;
+    }
+    .lummate-profile-card-subtitle,
+    .lummate-profile-card-stamp {
+      font-size: 11px;
+      color: rgba(191, 219, 254, 0.72);
+    }
+    .lummate-profile-card-body {
+      display: grid;
+      gap: 8px;
+      font-size: 12px;
+    }
+    .lummate-profile-card-preview {
+      color: rgba(226, 232, 240, 0.88);
+      line-height: 1.4;
+    }
+    .lummate-profile-card-axes {
+      color: rgba(125, 211, 252, 0.9);
+      font-size: 11px;
+      line-height: 1.45;
+    }
+    .lummate-profile-regenerate {
+      appearance: none;
+      border: 1px solid rgba(148, 163, 184, 0.22);
+      background: rgba(15, 23, 42, 0.52);
+      color: rgba(226, 232, 240, 0.95);
+      border-radius: 10px;
+      padding: 6px 10px;
+      font-size: 12px;
+      cursor: pointer;
+    }
     .lummate-settings-save {
       appearance: none;
       border: 1px solid rgba(34, 197, 94, 0.4);
@@ -438,7 +494,7 @@ export function setup(ctx: SpindleFrontendContext) {
   `)
 
   const debugIndicator = document.createElement('div')
-  if (SHOW_PHASE4_DEBUG) {
+  if (SHOW_PHASE4_DEBUG || SHOW_PHASE5_DEBUG) {
     debugIndicator.className = 'lummate-phase4-debug'
     debugIndicator.dataset.armed = 'false'
     debugIndicator.innerHTML = `
@@ -446,6 +502,10 @@ export function setup(ctx: SpindleFrontendContext) {
       <div class="lummate-phase4-debug-state">State: dormant</div>
       <div class="lummate-phase4-debug-count">Non-relevant count: 0</div>
       <div class="lummate-phase4-debug-message">Last relevant: none</div>
+      <div class="lummate-phase4-debug-title">Phase 5 Profile Cache</div>
+      <div class="lummate-phase5-debug-user">User profile: pending</div>
+      <div class="lummate-phase5-debug-character">Character profile: pending</div>
+      <div class="lummate-phase5-debug-fingerprint">Fingerprints: -- / --</div>
     `
     document.body.appendChild(debugIndicator)
   }
@@ -475,6 +535,20 @@ export function setup(ctx: SpindleFrontendContext) {
     `,
   })
 
+  function formatProfileStatus(profile: ParticipantProfile | null, label: string) {
+    if (!profile) return `${label}: unavailable`
+    return `${label}: ${profile.displayName} (${profile.updatedAt ? 'cached' : 'uncached'})`
+  }
+
+  function formatCharacterProfilesStatus(profiles: ParticipantProfile[]) {
+    if (profiles.length === 0) return 'Character profiles: unavailable'
+    if (profiles.length === 1) {
+      const [profile] = profiles
+      return `Character profiles: ${profile.displayName} (${profile.updatedAt ? 'cached' : 'uncached'})`
+    }
+    return `Character profiles: ${profiles.length} cached`
+  }
+
   function updateMessageVisual(messageId: string) {
     const button = buttons.get(messageId)
     const status = statusLabels.get(messageId)
@@ -499,29 +573,51 @@ export function setup(ctx: SpindleFrontendContext) {
   }
 
   function updateDebugIndicator() {
-    if (!SHOW_PHASE4_DEBUG) return
+    if (!SHOW_PHASE4_DEBUG && !SHOW_PHASE5_DEBUG) return
 
     const stateNode = debugIndicator.querySelector('.lummate-phase4-debug-state')
     const countNode = debugIndicator.querySelector('.lummate-phase4-debug-count')
     const messageNode = debugIndicator.querySelector('.lummate-phase4-debug-message')
+    const userNode = debugIndicator.querySelector('.lummate-phase5-debug-user')
+    const characterNode = debugIndicator.querySelector('.lummate-phase5-debug-character')
+    const fingerprintNode = debugIndicator.querySelector('.lummate-phase5-debug-fingerprint')
 
-    if (!parserSessionState) {
-      debugIndicator.dataset.armed = 'false'
-      if (stateNode) stateNode.textContent = 'State: dormant'
-      if (countNode) countNode.textContent = 'Non-relevant count: 0'
-      if (messageNode) messageNode.textContent = 'Last relevant: none'
-      return
+    if (SHOW_PHASE4_DEBUG) {
+      if (!parserSessionState) {
+        debugIndicator.dataset.armed = 'false'
+        if (stateNode) stateNode.textContent = 'State: dormant'
+        if (countNode) countNode.textContent = 'Non-relevant count: 0'
+        if (messageNode) messageNode.textContent = 'Last relevant: none'
+      } else {
+        debugIndicator.dataset.armed = parserSessionState.armed ? 'true' : 'false'
+        if (stateNode) {
+          stateNode.textContent = `State: ${parserSessionState.armed ? 'armed' : 'dormant'}`
+        }
+        if (countNode) {
+          countNode.textContent = `Non-relevant count: ${parserSessionState.consecutiveNonRelevantMessageCount}`
+        }
+        if (messageNode) {
+          messageNode.textContent = `Last relevant: ${parserSessionState.lastRelevantMessageId ?? 'none'}`
+        }
+      }
+    } else {
+      if (stateNode) stateNode.textContent = 'State: hidden'
+      if (countNode) countNode.textContent = 'Non-relevant count: hidden'
+      if (messageNode) messageNode.textContent = 'Last relevant: hidden'
     }
 
-    debugIndicator.dataset.armed = parserSessionState.armed ? 'true' : 'false'
-    if (stateNode) {
-      stateNode.textContent = `State: ${parserSessionState.armed ? 'armed' : 'dormant'}`
-    }
-    if (countNode) {
-      countNode.textContent = `Non-relevant count: ${parserSessionState.consecutiveNonRelevantMessageCount}`
-    }
-    if (messageNode) {
-      messageNode.textContent = `Last relevant: ${parserSessionState.lastRelevantMessageId ?? 'none'}`
+    if (SHOW_PHASE5_DEBUG) {
+      const userProfile = participantProfiles?.userProfile ?? null
+      const characterProfiles = participantProfiles?.characterProfiles ?? []
+      if (userNode) {
+        userNode.textContent = formatProfileStatus(userProfile, 'User profile')
+      }
+      if (characterNode) {
+        characterNode.textContent = formatCharacterProfilesStatus(characterProfiles)
+      }
+      if (fingerprintNode) {
+        fingerprintNode.textContent = `Fingerprints: ${userProfile?.sourceFingerprint?.slice(0, 8) ?? '--'} / ${characterProfiles.map((profile) => profile.sourceFingerprint?.slice(0, 8) ?? '--').join(', ') || '--'}`
+      }
     }
   }
 
@@ -589,7 +685,8 @@ export function setup(ctx: SpindleFrontendContext) {
   }
 
   function syncActiveChat() {
-    const nextChatId = ctx.getActiveChat().chatId
+    const activeChat = ctx.getActiveChat()
+    const nextChatId = activeChat.chatId
     if (nextChatId === activeChatId) return
 
     activeChatId = nextChatId
@@ -601,8 +698,20 @@ export function setup(ctx: SpindleFrontendContext) {
 
     ctx.sendToBackend({
       type: 'lummate.phase1.chat_changed',
-      payload: { chatId: activeChatId },
+      payload: { chatId: activeChat.chatId, characterId: activeChat.characterId },
     })
+    ctx.sendToBackend({
+      type: 'lummate.settings.bootstrap',
+      payload: { chatId: activeChat.chatId, characterId: activeChat.characterId },
+    })
+  }
+
+  function getActiveChatContext() {
+    const activeChat = ctx.getActiveChat()
+    return {
+      chatId: activeChat.chatId,
+      characterId: activeChat.characterId,
+    }
   }
 
   function cloneSettings(settings: UserSettings): UserSettings {
@@ -673,8 +782,157 @@ export function setup(ctx: SpindleFrontendContext) {
       type: 'lummate.settings.save',
       payload: {
         settings: draftSettings,
+        context: getActiveChatContext(),
       },
     })
+  }
+
+  function buildProfileAxesSummary(profile: ParticipantProfile) {
+    return [
+      `str ${profile.mechanicalAxes.baselineStrengthBias}`,
+      `tmp ${profile.mechanicalAxes.baselineTempoBias}`,
+      `agg ${profile.mechanicalAxes.rampAggression}`,
+      `wgt ${profile.mechanicalAxes.motionWeight}`,
+      `end ${profile.mechanicalAxes.endurance}`,
+      `smth ${profile.mechanicalAxes.smoothness}`,
+      `dom ${profile.mechanicalAxes.dominancePressure}`,
+      `tease ${profile.mechanicalAxes.teasingTendency}`,
+    ].join(' · ')
+  }
+
+  function createProfileCard(
+    title: string,
+    profile: ParticipantProfile | null,
+    participantKind: 'character' | 'persona',
+  ) {
+    const card = document.createElement('div')
+    card.className = 'lummate-profile-card'
+
+    const header = document.createElement('div')
+    header.className = 'lummate-profile-card-header'
+
+    const titleBlock = document.createElement('div')
+    const heading = document.createElement('h4')
+    heading.textContent = title
+    titleBlock.appendChild(heading)
+
+    const subtitle = document.createElement('div')
+    subtitle.className = 'lummate-profile-card-subtitle'
+    subtitle.textContent = profile
+      ? `${profile.displayName} · ${profile.sourceFingerprint?.slice(0, 8) ?? 'no-fp'}`
+      : 'No source available'
+    titleBlock.appendChild(subtitle)
+    header.appendChild(titleBlock)
+
+    const regenerateButton = document.createElement('button')
+    regenerateButton.type = 'button'
+    regenerateButton.className = 'lummate-profile-regenerate'
+    regenerateButton.textContent = 'Regenerate'
+    regenerateButton.disabled = settingsSaveInFlight
+    regenerateButton.addEventListener('click', () => {
+      setSettingsStatus(`Regenerating ${participantKind === 'persona' ? 'user' : 'character'} profile...`)
+      ctx.sendToBackend({
+        type: 'lummate.phase5.regenerate_profile',
+        payload: {
+          ...getActiveChatContext(),
+          participantKind,
+        },
+      })
+    })
+    header.appendChild(regenerateButton)
+    card.appendChild(header)
+
+    const body = document.createElement('div')
+    body.className = 'lummate-profile-card-body'
+    if (!profile) {
+      body.textContent =
+        participantKind === 'persona'
+          ? 'No active or default persona is available for profile derivation.'
+          : 'No active character is attached to this chat.'
+    } else {
+      const preview = document.createElement('div')
+      preview.className = 'lummate-profile-card-preview'
+      preview.textContent = profile.sourcePreview || 'No source preview available.'
+      body.appendChild(preview)
+
+      const axes = document.createElement('div')
+      axes.className = 'lummate-profile-card-axes'
+      axes.textContent = buildProfileAxesSummary(profile)
+      body.appendChild(axes)
+
+      const stamp = document.createElement('div')
+      stamp.className = 'lummate-profile-card-stamp'
+      stamp.textContent = `Derived ${profile.updatedAt ?? 'unknown'}`
+      body.appendChild(stamp)
+    }
+    card.appendChild(body)
+
+    return card
+  }
+
+  function createCharacterProfilesCard(title: string, profiles: ParticipantProfile[]) {
+    const card = document.createElement('div')
+    card.className = 'lummate-profile-card'
+
+    const header = document.createElement('div')
+    header.className = 'lummate-profile-card-header'
+
+    const titleBlock = document.createElement('div')
+    const heading = document.createElement('h4')
+    heading.textContent = title
+    titleBlock.appendChild(heading)
+
+    const subtitle = document.createElement('div')
+    subtitle.className = 'lummate-profile-card-subtitle'
+    subtitle.textContent =
+      profiles.length === 0
+        ? 'No character profiles available'
+        : profiles.length === 1
+          ? '1 character profile cached'
+          : `${profiles.length} character profiles cached`
+    titleBlock.appendChild(subtitle)
+    header.appendChild(titleBlock)
+
+    const regenerateButton = document.createElement('button')
+    regenerateButton.type = 'button'
+    regenerateButton.className = 'lummate-profile-regenerate'
+    regenerateButton.textContent = 'Regenerate'
+    regenerateButton.disabled = settingsSaveInFlight
+    regenerateButton.addEventListener('click', () => {
+      setSettingsStatus('Regenerating character profiles...')
+      ctx.sendToBackend({
+        type: 'lummate.phase5.regenerate_profile',
+        payload: {
+          ...getActiveChatContext(),
+          participantKind: 'character',
+        },
+      })
+    })
+    header.appendChild(regenerateButton)
+    card.appendChild(header)
+
+    const body = document.createElement('div')
+    body.className = 'lummate-profile-card-body'
+
+    if (profiles.length === 0) {
+      body.textContent =
+        'No active character profiles are available for this chat. In group chats, this means Lumiverse did not expose a participant roster beyond the primary character.'
+    } else {
+      for (const profile of profiles) {
+        const block = document.createElement('div')
+        block.className = 'lummate-profile-card-preview'
+        block.textContent = `${profile.displayName} · ${profile.sourceFingerprint?.slice(0, 8) ?? 'no-fp'}`
+        body.appendChild(block)
+
+        const axes = document.createElement('div')
+        axes.className = 'lummate-profile-card-axes'
+        axes.textContent = buildProfileAxesSummary(profile)
+        body.appendChild(axes)
+      }
+    }
+
+    card.appendChild(body)
+    return card
   }
 
   function createField(container: HTMLElement, labelText: string) {
@@ -781,6 +1039,27 @@ export function setup(ctx: SpindleFrontendContext) {
     )
 
     root.appendChild(parserSection)
+
+    const profileSection = document.createElement('section')
+    profileSection.className = 'lummate-settings-section'
+    profileSection.innerHTML = `
+      <h3>Participant Profiles</h3>
+      <p>These cached tactile profiles are derived from the active user persona and the current chat character, then reused across later planning work.</p>
+    `
+
+    const profileGrid = document.createElement('div')
+    profileGrid.className = 'lummate-profile-grid'
+    profileGrid.appendChild(
+      createProfileCard('User Persona Profile', participantProfiles?.userProfile ?? null, 'persona'),
+    )
+    profileGrid.appendChild(
+      createCharacterProfilesCard(
+        'Character Profiles',
+        participantProfiles?.characterProfiles ?? [],
+      ),
+    )
+    profileSection.appendChild(profileGrid)
+    root.appendChild(profileSection)
 
     const mappingsSection = document.createElement('section')
     mappingsSection.className = 'lummate-settings-section'
@@ -1216,7 +1495,7 @@ export function setup(ctx: SpindleFrontendContext) {
       ctx.sendToBackend({
         type: 'lummate.phase1.play_toggle',
         payload: {
-          chatId: activeChatId,
+          ...getActiveChatContext(),
           messageId,
           playbackModeOverride: getPlaybackModeForMessage(messageId),
         },
@@ -1291,7 +1570,7 @@ export function setup(ctx: SpindleFrontendContext) {
           if (currentPlan?.messageId === messageId) {
             ctx.sendToBackend({
               type: 'lummate.phase3.set_playback_mode',
-              payload: { chatId: activeChatId, messageId, playbackMode: mode },
+              payload: { ...getActiveChatContext(), messageId, playbackMode: mode },
             })
           } else {
             syncVisuals()
@@ -1306,7 +1585,7 @@ export function setup(ctx: SpindleFrontendContext) {
         ctx.sendToBackend({
           type: 'lummate.phase3.regenerate',
           payload: {
-            chatId: activeChatId,
+            ...getActiveChatContext(),
             messageId,
             playbackModeOverride: getPlaybackModeForMessage(messageId),
           },
@@ -1348,9 +1627,11 @@ export function setup(ctx: SpindleFrontendContext) {
 
   function applySettingsBootstrap(payload: SettingsBootstrapPayload, saved: boolean) {
     settingsPayload = payload
+    participantProfiles = payload.participantProfiles
     draftSettings = cloneSettings(payload.settings)
     settingsSaveInFlight = false
     settingsStatus = saved ? 'Settings saved' : 'Settings loaded'
+    updateDebugIndicator()
     renderSettingsTab()
   }
 
@@ -1373,6 +1654,12 @@ export function setup(ctx: SpindleFrontendContext) {
       case 'lummate.settings.save_result':
         applySettingsBootstrap(payload.payload, true)
         break
+      case 'lummate.phase5.profile_result':
+        participantProfiles = payload.payload
+        settingsStatus = 'Participant profiles refreshed'
+        updateDebugIndicator()
+        renderSettingsTab()
+        break
     }
   })
 
@@ -1384,12 +1671,12 @@ export function setup(ctx: SpindleFrontendContext) {
     if (!settingsPayload) {
       settingsStatus = 'Loading settings...'
       renderSettingsTab()
-      ctx.sendToBackend({ type: 'lummate.settings.bootstrap' })
+      ctx.sendToBackend({ type: 'lummate.settings.bootstrap', payload: getActiveChatContext() })
     }
   })
 
-  ctx.sendToBackend({ type: 'lummate.phase1.bootstrap', payload: { chatId: activeChatId } })
-  ctx.sendToBackend({ type: 'lummate.settings.bootstrap' })
+  ctx.sendToBackend({ type: 'lummate.phase1.bootstrap', payload: getActiveChatContext() })
+  ctx.sendToBackend({ type: 'lummate.settings.bootstrap', payload: getActiveChatContext() })
   scanMessages()
   const scanInterval = window.setInterval(() => {
     syncActiveChat()
@@ -1406,7 +1693,7 @@ export function setup(ctx: SpindleFrontendContext) {
     clearSettingsComponents()
     clearHoverTimers()
     removeStyle()
-    if (SHOW_PHASE4_DEBUG) {
+    if (SHOW_PHASE4_DEBUG || SHOW_PHASE5_DEBUG) {
       debugIndicator.remove()
     }
 

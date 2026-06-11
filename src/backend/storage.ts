@@ -1,22 +1,76 @@
 import type { SpindleAPI } from 'lumiverse-spindle-types'
 import {
-  DEFAULT_SESSION_STATE,
+  CALIBRATABLE_ACTION_TYPES,
+  CALIBRATION_EXECUTION_PROFILES,
+  ALL_ACTION_TYPES,
   DEFAULT_USER_SETTINGS,
-  type SessionState,
+  type ActionCalibrationPreset,
+  type XToysActionMappingSettings,
   type UserSettings,
 } from '../shared/contracts'
 
 const SETTINGS_PATH = 'phase1/settings.json'
-const SESSION_PATH = 'phase1/session-state.json'
+
+function buildDefaultActionMappings(): XToysActionMappingSettings[] {
+  return ALL_ACTION_TYPES.map((semanticActionType) => ({
+    semanticActionType,
+    xtoysActionName: '',
+    fallbackActionName: null,
+    supported: semanticActionType !== 'pause',
+    updatedAt: null,
+  }))
+}
+
+function buildDefaultActionCalibrationPresets(): ActionCalibrationPreset[] {
+  return CALIBRATABLE_ACTION_TYPES.map((semanticActionType, index) => ({
+    semanticActionType,
+    supported: true,
+    fallbackTarget: null,
+    baseAmplitude: 50,
+    baseTempo: 50,
+    preferredExecutionProfile:
+      semanticActionType === 'thrust' ? 'pattern_funscript' : CALIBRATION_EXECUTION_PROFILES[0],
+    preferredTransitionStyle: semanticActionType === 'pulse' ? 'abrupt' : 'smooth',
+    repeatStyle:
+      semanticActionType === 'pulse' ? 'once' : semanticActionType === 'tease' ? 'loop' : 'hold',
+    holdTendency: index % 2 === 0 ? 60 : 50,
+    revision: 1,
+  }))
+}
+
+function mergeSettings(settings: UserSettings): UserSettings {
+  const mappingsByType = new Map(
+    (settings.xtoysActionMappings ?? []).map((mapping) => [mapping.semanticActionType, mapping]),
+  )
+  const calibrationsByType = new Map(
+    (settings.actionCalibrationPresets ?? []).map((preset) => [preset.semanticActionType, preset]),
+  )
+
+  return {
+    parser: {
+      ...DEFAULT_USER_SETTINGS.parser,
+      ...settings.parser,
+    },
+    xtoysActionMappings: buildDefaultActionMappings().map((mapping) => ({
+      ...mapping,
+      ...mappingsByType.get(mapping.semanticActionType),
+    })),
+    actionCalibrationPresets: buildDefaultActionCalibrationPresets().map((preset) => ({
+      ...preset,
+      ...calibrationsByType.get(preset.semanticActionType),
+    })),
+  }
+}
 
 export async function readUserSettings(
   spindle: SpindleAPI,
   userId: string,
 ): Promise<UserSettings> {
-  return spindle.userStorage.getJson<UserSettings>(SETTINGS_PATH, {
+  const settings = await spindle.userStorage.getJson<UserSettings>(SETTINGS_PATH, {
     fallback: DEFAULT_USER_SETTINGS,
     userId,
   })
+  return mergeSettings(settings)
 }
 
 export async function writeUserSettings(
@@ -24,28 +78,7 @@ export async function writeUserSettings(
   userId: string,
   settings: UserSettings,
 ): Promise<void> {
-  await spindle.userStorage.setJson(SETTINGS_PATH, settings, {
-    indent: 2,
-    userId,
-  })
-}
-
-export async function readSessionState(
-  spindle: SpindleAPI,
-  userId: string,
-): Promise<SessionState> {
-  return spindle.userStorage.getJson<SessionState>(SESSION_PATH, {
-    fallback: DEFAULT_SESSION_STATE,
-    userId,
-  })
-}
-
-export async function writeSessionState(
-  spindle: SpindleAPI,
-  userId: string,
-  session: SessionState,
-): Promise<void> {
-  await spindle.userStorage.setJson(SESSION_PATH, session, {
+  await spindle.userStorage.setJson(SETTINGS_PATH, mergeSettings(settings), {
     indent: 2,
     userId,
   })

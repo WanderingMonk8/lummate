@@ -19,9 +19,11 @@ The Phase 1 Lumiverse Spindle scaffold is working locally and has been verified 
 - the extension installs successfully
 - the frontend loads successfully
 - a custom per-message action button can be injected into the native message action row
-- frontend/backend messaging and persisted session state plumbing are working
+- frontend/backend messaging and runtime per-chat session plumbing are working
+- a Lummate settings drawer is available for parser connection selection, XToys action-name mapping, and Lumiverse-side tactile calibration presets
+- a first heuristic planner stub runs on Play and surfaces a visible per-message plan preview for verification
 
-The project is still pre-parser and pre-XToys-integration, but the extension shell is now active and testable.
+The project is still pre-LLM-parser and pre-XToys-runtime-integration, but the extension shell is now active, inspectable, and testable inside Lumiverse.
 
 The main working documents are:
 
@@ -41,7 +43,7 @@ The planned extension will:
 ## Near-Term Goals
 
 - expand the working scaffold into parser-aware message actions
-- add parser connection settings and settings UI
-- implement semantic beat parsing stubs and message plan generation
-- add participant profile caching and action calibration plumbing
+- replace the heuristic planner stub with LLM-backed semantic parsing
+- deepen semantic beat parsing and multi-beat message plan generation
+- add participant profile caching and richer state parsing
 - integrate XToys webhook command dispatch

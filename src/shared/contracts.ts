@@ -33,16 +33,6 @@ export type ExecutionProfile =
 
 export type ParserConnectionFallback = 'default_connection' | 'fail_closed'
 
-export type PlanStaleReason =
-  | 'parser_connection_changed'
-  | 'participant_profile_changed'
-  | 'user_profile_changed'
-  | 'action_calibration_changed'
-  | 'duration_table_changed'
-  | 'smoothing_changed'
-  | 'safety_caps_changed'
-  | 'manual_regeneration_requested'
-
 export interface MechanicalAxes {
   baselineStrengthBias: number
   baselineTempoBias: number
@@ -78,6 +68,15 @@ export interface ParserConnectionSettings {
   fallbackBehavior: ParserConnectionFallback
 }
 
+export interface ConnectionProfileSummary {
+  id: string
+  name: string
+  provider: string
+  model: string
+  isDefault: boolean
+  hasApiKey: boolean
+}
+
 export interface XToysActionMappingSettings {
   semanticActionType: ActionType
   xtoysActionName: string
@@ -90,7 +89,6 @@ export interface ActionCalibrationPreset {
   semanticActionType: ActionType
   supported: boolean
   fallbackTarget: ActionType | null
-  xtoysActionName: string
   baseAmplitude: number
   baseTempo: number
   preferredExecutionProfile: ExecutionProfile
@@ -130,15 +128,17 @@ export interface ResolvedBeat {
 
 export interface MessagePlan {
   messageId: string
-  revision: number
   createdAt: string
   playbackMode: PlaybackMode
-  stale: boolean
   semanticBeats: SemanticBeat[]
   resolvedBeats: ResolvedBeat[]
   continuityVerdict: ContinuityVerdict | null
   transitionMode: TransitionMode | null
-  staleReasons: PlanStaleReason[]
+}
+
+export interface RuntimePlanBuffer {
+  currentPlan: MessagePlan | null
+  previousPlan: MessagePlan | null
 }
 
 export interface HeldState {
@@ -167,14 +167,17 @@ export interface ParserSessionState {
 export interface UserSettings {
   parser: ParserConnectionSettings
   xtoysActionMappings: XToysActionMappingSettings[]
+  actionCalibrationPresets: ActionCalibrationPreset[]
 }
 
 export interface SessionState {
+  activeChatId: string | null
   activeMessageId: string | null
   lastPlayedMessageId: string | null
   lastUpdatedAt: string | null
   parserSession: ParserSessionState
   heldState: HeldState
+  runtimePlans: RuntimePlanBuffer
 }
 
 export interface BootstrapPayload {
@@ -182,17 +185,36 @@ export interface BootstrapPayload {
   session: SessionState
 }
 
+export interface SettingsBootstrapPayload {
+  settings: UserSettings
+  availableConnections: ConnectionProfileSummary[]
+}
+
+export interface SettingsSavePayload {
+  settings: UserSettings
+}
+
 export interface PlayTogglePayload {
+  chatId: string | null
   messageId: string
 }
 
+export interface ChatScopedPayload {
+  chatId: string | null
+}
+
 export type FrontendToBackendMessage =
-  | { type: 'lummate.phase1.bootstrap' }
+  | { type: 'lummate.phase1.bootstrap'; payload: ChatScopedPayload }
+  | { type: 'lummate.phase1.chat_changed'; payload: ChatScopedPayload }
   | { type: 'lummate.phase1.play_toggle'; payload: PlayTogglePayload }
+  | { type: 'lummate.settings.bootstrap' }
+  | { type: 'lummate.settings.save'; payload: SettingsSavePayload }
 
 export type BackendToFrontendMessage =
   | { type: 'lummate.phase1.bootstrap_result'; payload: BootstrapPayload }
   | { type: 'lummate.phase1.session_state'; payload: BootstrapPayload }
+  | { type: 'lummate.settings.bootstrap_result'; payload: SettingsBootstrapPayload }
+  | { type: 'lummate.settings.save_result'; payload: SettingsBootstrapPayload }
   | { type: 'lummate.phase1.error'; message: string }
 
 export const DEFAULT_MECHANICAL_AXES: MechanicalAxes = {
@@ -213,7 +235,32 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
     fallbackBehavior: 'default_connection',
   },
   xtoysActionMappings: [],
+  actionCalibrationPresets: [],
 }
+
+export const ALL_ACTION_TYPES: ActionType[] = [
+  'tease',
+  'stroke',
+  'thrust',
+  'suction',
+  'grind',
+  'pulse',
+  'lick',
+  'squeeze',
+  'pause',
+]
+
+export const CALIBRATABLE_ACTION_TYPES: ActionType[] = ALL_ACTION_TYPES.filter(
+  (actionType) => actionType !== 'pause',
+)
+
+export const CALIBRATION_EXECUTION_PROFILES: ExecutionProfile[] = [
+  'intensity_direct',
+  'pattern_scripted',
+  'pattern_funscript',
+  'composite_blend',
+  'parallel_blend',
+]
 
 export const DEFAULT_PARSER_SESSION_STATE: ParserSessionState = {
   armed: false,
@@ -221,6 +268,11 @@ export const DEFAULT_PARSER_SESSION_STATE: ParserSessionState = {
   lastRelevantMessageId: null,
   currentHeldStateRef: null,
   continuityMemory: {},
+}
+
+export const DEFAULT_RUNTIME_PLAN_BUFFER: RuntimePlanBuffer = {
+  currentPlan: null,
+  previousPlan: null,
 }
 
 export const DEFAULT_HELD_STATE: HeldState = {
@@ -239,9 +291,11 @@ export const DEFAULT_HELD_STATE: HeldState = {
 }
 
 export const DEFAULT_SESSION_STATE: SessionState = {
+  activeChatId: null,
   activeMessageId: null,
   lastPlayedMessageId: null,
   lastUpdatedAt: null,
   parserSession: DEFAULT_PARSER_SESSION_STATE,
   heldState: DEFAULT_HELD_STATE,
+  runtimePlans: DEFAULT_RUNTIME_PLAN_BUFFER,
 }

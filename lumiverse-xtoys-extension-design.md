@@ -47,6 +47,20 @@ This removes ambiguity because the user is always choosing to play the plan atta
 
 Each message plan is generated only when the user presses Play on that message.
 
+The extension should not keep a long-term library of generated message plans.
+
+Instead, it only needs two runtime plan slots:
+
+- the current message plan
+- the immediately previous message plan
+
+When a new message is played:
+
+- the previous slot becomes the former current plan
+- the current slot becomes the newly generated plan
+
+Older message plans do not need to be preserved.
+
 After creation, the plan may be cached for replay until it is invalidated or regenerated.
 
 ## Narrative Parsing Scope
@@ -652,6 +666,12 @@ The last narratively persistent tactile state that remains in effect after a pri
 
 The held state must remain in memory so the extension can compare it against newly played messages and decide the best transition strategy.
 
+Held state is runtime-only.
+
+If the user leaves a chat and later reopens it, the held state should not be restored automatically.
+
+Reopening a chat should start from a clean runtime state with no active held action, no carried-over current plan, and no carried-over previous plan.
+
 Recommended held-state fields:
 
 - `action_family`
@@ -698,6 +718,10 @@ When the user presses Play on a message:
 5. the controller decides the resulting end state
 
 Pressing Play should also arm the parsing session if it is currently dormant.
+
+The plan generated for that message is only needed for immediate runtime use.
+
+The extension does not need to retain a permanent archive of prior message plans.
 
 ## Per-Message Control Surface
 
@@ -1181,11 +1205,18 @@ Auto-play, if supported, should be off by default.
 7. The extension parses or infers the current physical and emotional state of the relevant participants, using baseline values where no state is found.
 8. The extension loads the calibrated tactile preset for each beat's semantic action type, or uses fallback behavior if no direct calibrated preset exists.
 9. The extension modulates beat values using cached profiles, parsed current state, calibrated action presets, and user overrides.
-10. The extension stores the resulting message-specific tactile plan for playback and replay.
+10. The extension stores the resulting message-specific tactile plan only in short-lived runtime memory.
 11. The playback controller compares the message plan with the current held state.
 12. The extension sends the resulting sequence to XToys.
 13. XToys executes the sequence.
 14. The controller resolves the final state as idle, held, resumed, or looped.
+
+At most, the runtime only needs:
+
+- the current message plan
+- the immediately previous message plan
+
+If the chat is exited and later reopened, those runtime plan memories should be cleared.
 
 ## Open Design Questions
 
@@ -1201,27 +1232,33 @@ The following items still need further design:
 
 The following items are acknowledged but intentionally deferred for now:
 
-### Cached Message Plan Staleness
+### Runtime Plan Memory
 
-If a message plan was generated before character profiles, duration settings, or safety settings changed, replaying that stored plan may no longer reflect the newest derived values.
+The extension does not need to keep a durable history of generated message plans.
 
-Current mitigation:
+Instead, it should only retain:
 
-- each message should expose a `Regenerate` action in the hover or long-press breakout controls
-- `Regenerate` rebuilds that message plan using the current cached character profile, current settings, and current safety limits
+- the current message plan
+- the immediately previous message plan
 
-In addition, changes to parser-relevant preset values should flag previously generated message plans as stale.
+These runtime-only plan slots are sufficient for:
 
-This should include changes such as:
+- comparing the newly played message against the immediately preceding one
+- supporting replace, modulate, and blend decisions
+- preserving short-range narrative continuity during an active session
 
-- character profile updates
-- user tactile profile updates
-- per-action tactile calibration changes
-- duration table changes
-- safety cap changes
-- transition smoothing changes
+When a new message is played:
 
-This is not currently treated as a blocking design issue for v1 because the UI can give the user an explicit way to refresh stale plans when needed, but the stale flag should still be tracked.
+- the previous slot becomes the old current plan
+- the current slot becomes the newly generated plan
+
+When the user exits a chat or later reopens it:
+
+- current plan memory is cleared
+- previous plan memory is cleared
+- held state is cleared
+
+Because long-term message-plan storage is not required in this design, stale-plan tracking is also no longer required for old message plans.
 
 ### Per-Message Advanced Controls
 

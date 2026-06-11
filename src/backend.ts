@@ -217,6 +217,42 @@ function resolveTransitionMode(
   return null
 }
 
+type LightweightRelevanceVerdict = 'relevant' | 'non_relevant' | 'explicit_stop'
+
+function detectExplicitStop(content: string): boolean {
+  return /\b(stops|withdraws|pulls away|breaks contact|lets go|pulls out|backs off)\b/i.test(content)
+}
+
+function detectRelevantGenitalContact(content: string): boolean {
+  const normalized = content.toLowerCase()
+
+  const genitalTerms = /(cock|dick|clit|clitoris|pussy|cunt|vagina|penis|genitals|shaft|tip|hole|sex|thighs spread|entrance)/
+  const contactTerms =
+    /(stroke|thrust|grind|suck|suction|lick|squeeze|pulse|tease|rub|ride|fuck|press|deepen|quicken|touch|kiss|slide)/
+
+  return genitalTerms.test(normalized) && contactTerms.test(normalized)
+}
+
+function evaluateLaterMessage(content: string): LightweightRelevanceVerdict {
+  if (detectExplicitStop(content)) return 'explicit_stop'
+  if (detectRelevantGenitalContact(content)) return 'relevant'
+  return 'non_relevant'
+}
+
+function clearHeldAndContinuity(session: SessionState): SessionState {
+  return {
+    ...session,
+    heldState: {
+      ...DEFAULT_SESSION_STATE.heldState,
+    },
+    parserSession: {
+      ...session.parserSession,
+      currentHeldStateRef: null,
+      continuityMemory: {},
+    },
+  }
+}
+
 async function buildMessagePlan(
   chatId: string,
   messageId: string,
@@ -349,7 +385,21 @@ async function handleFrontendMessage(
           lastUpdatedAt: new Date().toISOString(),
           parserSession: {
             ...current.parserSession,
-            armed: nextActiveMessageId !== null,
+            armed: current.parserSession.armed || nextActiveMessageId !== null,
+            consecutiveNonRelevantMessageCount:
+              nextActiveMessageId !== null ? 0 : current.parserSession.consecutiveNonRelevantMessageCount,
+            lastRelevantMessageId:
+              nextActiveMessageId !== null
+                ? payload.payload.messageId
+                : current.parserSession.lastRelevantMessageId,
+            continuityMemory:
+              nextActiveMessageId !== null
+                ? {
+                    ...current.parserSession.continuityMemory,
+                    lastPlayedMessageId: payload.payload.messageId,
+                    lastPlayArmedAt: new Date().toISOString(),
+                  }
+                : current.parserSession.continuityMemory,
           },
           runtimePlans: nextRuntimePlans,
         }
@@ -489,6 +539,97 @@ spindle.onFrontendMessage((payload, userId) => {
   }
 
   void handleFrontendMessage(payload, userId)
+})
+
+spindle.on('GENERATION_ENDED', async (payload, userId) => {
+  if (!userId) return
+  if (!payload.chatId) return
+  if (!payload.content || payload.error) return
+  if ((activeChatIds.get(userId) ?? null) !== payload.chatId) return
+
+  const current = syncSessionToChat(userId, payload.chatId)
+  if (!current.parserSession.armed) return
+
+  const verdict = evaluateLaterMessage(payload.content)
+  let nextSession: SessionState = {
+    ...current,
+    lastUpdatedAt: new Date().toISOString(),
+  }
+
+  if (verdict === 'relevant') {
+    nextSession = {
+      ...nextSession,
+      parserSession: {
+        ...nextSession.parserSession,
+        consecutiveNonRelevantMessageCount: 0,
+        lastRelevantMessageId: payload.messageId ?? nextSession.parserSession.lastRelevantMessageId,
+        continuityMemory: {
+          ...nextSession.parserSession.continuityMemory,
+          lastEvaluatedMessageId: payload.messageId ?? null,
+          lastEvaluationVerdict: verdict,
+          lastEvaluationAt: new Date().toISOString(),
+        },
+      },
+    }
+  } else if (verdict === 'explicit_stop') {
+    nextSession = clearHeldAndContinuity(nextSession)
+    nextSession = {
+      ...nextSession,
+      parserSession: {
+        ...nextSession.parserSession,
+        armed: true,
+        consecutiveNonRelevantMessageCount: 0,
+        continuityMemory: {
+          ...nextSession.parserSession.continuityMemory,
+          lastEvaluatedMessageId: payload.messageId ?? null,
+          lastEvaluationVerdict: verdict,
+          lastEvaluationAt: new Date().toISOString(),
+        },
+      },
+    }
+  } else {
+    const nextCount = nextSession.parserSession.consecutiveNonRelevantMessageCount + 1
+    nextSession = {
+      ...nextSession,
+      parserSession: {
+        ...nextSession.parserSession,
+        consecutiveNonRelevantMessageCount: nextCount,
+        continuityMemory: {
+          ...nextSession.parserSession.continuityMemory,
+          lastEvaluatedMessageId: payload.messageId ?? null,
+          lastEvaluationVerdict: verdict,
+          lastEvaluationAt: new Date().toISOString(),
+        },
+      },
+    }
+
+    const threshold = (await readUserSettings(spindle, userId)).parser.deactivationThreshold
+    if (nextCount >= threshold) {
+      nextSession = clearHeldAndContinuity(nextSession)
+      nextSession = {
+        ...nextSession,
+        parserSession: {
+          ...nextSession.parserSession,
+          armed: false,
+          consecutiveNonRelevantMessageCount: 0,
+          lastRelevantMessageId: null,
+          continuityMemory: {},
+        },
+      }
+    }
+  }
+
+  runtimeSessions.set(userId, nextSession)
+  activeChatIds.set(userId, payload.chatId)
+
+  const bootstrap = await buildBootstrap(userId, payload.chatId)
+  sendToUser(
+    {
+      type: 'lummate.phase1.session_state',
+      payload: bootstrap,
+    },
+    userId,
+  )
 })
 
 spindle.log.info('Lummate phase 1 backend loaded')

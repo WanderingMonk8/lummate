@@ -9,6 +9,7 @@ import type {
   BootstrapPayload,
   MessagePlan,
   PlaybackMode,
+  ParserSessionState,
   SettingsBootstrapPayload,
   UserSettings,
 } from './shared/contracts'
@@ -31,6 +32,8 @@ const CALIBRATION_EXECUTION_PROFILES = [
   'composite_blend',
   'parallel_blend',
 ] as const
+
+const SHOW_PHASE4_DEBUG = false
 
 const CONTROL_SELECTOR = '.lummate-phase1-control'
 const ACTION_ROW_SELECTORS = [
@@ -158,6 +161,7 @@ export function setup(ctx: SpindleFrontendContext) {
   let activeChatId: string | null = ctx.getActiveChat().chatId
   let currentPlan: MessagePlan | null = null
   let openBreakoutMessageId: string | null = null
+  let parserSessionState: ParserSessionState | null = null
   let settingsPayload: SettingsBootstrapPayload | null = null
   let draftSettings: UserSettings | null = null
   let settingsStatus = 'Loading settings...'
@@ -303,6 +307,38 @@ export function setup(ctx: SpindleFrontendContext) {
     .lummate-phase1-mode-button:hover {
       border-color: rgba(148, 163, 184, 0.38);
     }
+    .lummate-phase4-debug {
+      position: fixed;
+      right: 14px;
+      bottom: 14px;
+      z-index: 50;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      min-width: 210px;
+      padding: 10px 12px;
+      border-radius: 12px;
+      border: 1px solid rgba(148, 163, 184, 0.22);
+      background: rgba(2, 6, 23, 0.92);
+      color: rgba(226, 232, 240, 0.96);
+      box-shadow: 0 14px 30px rgba(2, 6, 23, 0.26);
+      font-size: 12px;
+      line-height: 1.3;
+      pointer-events: none;
+    }
+    .lummate-phase4-debug-title {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: rgba(148, 163, 184, 0.9);
+    }
+    .lummate-phase4-debug[data-armed="true"] {
+      border-color: rgba(34, 197, 94, 0.35);
+    }
+    .lummate-phase4-debug[data-armed="false"] {
+      border-color: rgba(148, 163, 184, 0.22);
+    }
     .lummate-settings-root {
       display: flex;
       flex-direction: column;
@@ -401,6 +437,19 @@ export function setup(ctx: SpindleFrontendContext) {
     }
   `)
 
+  const debugIndicator = document.createElement('div')
+  if (SHOW_PHASE4_DEBUG) {
+    debugIndicator.className = 'lummate-phase4-debug'
+    debugIndicator.dataset.armed = 'false'
+    debugIndicator.innerHTML = `
+      <div class="lummate-phase4-debug-title">Lummate Parser Session</div>
+      <div class="lummate-phase4-debug-state">State: dormant</div>
+      <div class="lummate-phase4-debug-count">Non-relevant count: 0</div>
+      <div class="lummate-phase4-debug-message">Last relevant: none</div>
+    `
+    document.body.appendChild(debugIndicator)
+  }
+
   const settingsTab = ctx.ui.registerDrawerTab({
     id: 'lummate-settings',
     title: 'Lummate Settings',
@@ -449,6 +498,33 @@ export function setup(ctx: SpindleFrontendContext) {
     }
   }
 
+  function updateDebugIndicator() {
+    if (!SHOW_PHASE4_DEBUG) return
+
+    const stateNode = debugIndicator.querySelector('.lummate-phase4-debug-state')
+    const countNode = debugIndicator.querySelector('.lummate-phase4-debug-count')
+    const messageNode = debugIndicator.querySelector('.lummate-phase4-debug-message')
+
+    if (!parserSessionState) {
+      debugIndicator.dataset.armed = 'false'
+      if (stateNode) stateNode.textContent = 'State: dormant'
+      if (countNode) countNode.textContent = 'Non-relevant count: 0'
+      if (messageNode) messageNode.textContent = 'Last relevant: none'
+      return
+    }
+
+    debugIndicator.dataset.armed = parserSessionState.armed ? 'true' : 'false'
+    if (stateNode) {
+      stateNode.textContent = `State: ${parserSessionState.armed ? 'armed' : 'dormant'}`
+    }
+    if (countNode) {
+      countNode.textContent = `Non-relevant count: ${parserSessionState.consecutiveNonRelevantMessageCount}`
+    }
+    if (messageNode) {
+      messageNode.textContent = `Last relevant: ${parserSessionState.lastRelevantMessageId ?? 'none'}`
+    }
+  }
+
   function closeBreakout() {
     openBreakoutMessageId = null
     for (const [messageId, panel] of breakoutPanels.entries()) {
@@ -486,7 +562,7 @@ export function setup(ctx: SpindleFrontendContext) {
       openBreakout(messageId)
       updateBreakoutModeButtons(messageId)
       hoverOpenTimer = null
-    }, 180)
+    }, 2000)
   }
 
   function scheduleBreakoutClose(messageId: string) {
@@ -519,7 +595,9 @@ export function setup(ctx: SpindleFrontendContext) {
     activeChatId = nextChatId
     activeMessageId = null
     currentPlan = null
+    parserSessionState = null
     syncVisuals()
+    updateDebugIndicator()
 
     ctx.sendToBackend({
       type: 'lummate.phase1.chat_changed',
@@ -1260,7 +1338,9 @@ export function setup(ctx: SpindleFrontendContext) {
     activeChatId = payload.session.activeChatId
     activeMessageId = payload.session.activeMessageId
     currentPlan = payload.session.runtimePlans.currentPlan
+    parserSessionState = payload.session.parserSession
     syncVisuals()
+    updateDebugIndicator()
     for (const messageId of breakoutPanels.keys()) {
       updateBreakoutModeButtons(messageId)
     }
@@ -1326,6 +1406,9 @@ export function setup(ctx: SpindleFrontendContext) {
     clearSettingsComponents()
     clearHoverTimers()
     removeStyle()
+    if (SHOW_PHASE4_DEBUG) {
+      debugIndicator.remove()
+    }
 
     for (const wrapper of injections.values()) {
       ctx.dom.uninject(wrapper)

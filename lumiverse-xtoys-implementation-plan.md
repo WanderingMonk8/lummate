@@ -99,7 +99,9 @@ Deliverables:
 - main `Play / Stop` toggle
 - hover breakout on desktop
 - long-press breakout on mobile
-- message-level loading and stale indicators
+- message-level loading indicator
+- `Regenerate` action
+- per-message playback mode selection: `Play Once`, `Loop`, `Play Once and Hold`
 
 Feasibility assessment:
 
@@ -107,6 +109,7 @@ Feasibility assessment:
 - should be implemented through message-targeted DOM injection
 - DOM Helper explicitly supports message-targeted injection with virtualization persistence
 - this is one of the main custom UI areas in the project
+- stale indicators are no longer a core Phase 3 requirement because message plans are runtime-only rather than long-term cached artifacts
 
 ### Phase 4: Parser Session and On-Demand Planning
 

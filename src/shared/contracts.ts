@@ -197,16 +197,31 @@ export interface SettingsSavePayload {
 export interface PlayTogglePayload {
   chatId: string | null
   messageId: string
+  playbackModeOverride?: PlaybackMode | null
 }
 
 export interface ChatScopedPayload {
   chatId: string | null
 }
 
+export interface RegeneratePayload {
+  chatId: string | null
+  messageId: string
+  playbackModeOverride?: PlaybackMode | null
+}
+
+export interface SetPlaybackModePayload {
+  chatId: string | null
+  messageId: string
+  playbackMode: PlaybackMode
+}
+
 export type FrontendToBackendMessage =
   | { type: 'lummate.phase1.bootstrap'; payload: ChatScopedPayload }
   | { type: 'lummate.phase1.chat_changed'; payload: ChatScopedPayload }
   | { type: 'lummate.phase1.play_toggle'; payload: PlayTogglePayload }
+  | { type: 'lummate.phase3.regenerate'; payload: RegeneratePayload }
+  | { type: 'lummate.phase3.set_playback_mode'; payload: SetPlaybackModePayload }
   | { type: 'lummate.settings.bootstrap' }
   | { type: 'lummate.settings.save'; payload: SettingsSavePayload }
 

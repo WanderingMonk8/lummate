@@ -8,6 +8,7 @@ import type {
   BackendToFrontendMessage,
   BootstrapPayload,
   MessagePlan,
+  PlaybackMode,
   SettingsBootstrapPayload,
   UserSettings,
 } from './shared/contracts'
@@ -146,24 +147,36 @@ function isLikelyAssistantMessage(element: Element): boolean {
 export function setup(ctx: SpindleFrontendContext) {
   const injections = new Map<string, Element>()
   const buttons = new Map<string, HTMLButtonElement>()
+  const menuButtons = new Map<string, HTMLButtonElement>()
   const statusLabels = new Map<string, HTMLElement>()
   const previewLabels = new Map<string, HTMLElement>()
+  const breakoutPanels = new Map<string, HTMLElement>()
   const targets = new Map<string, Element>()
   const settingsComponents: Array<SpindleMountedComponent<unknown>> = []
 
   let activeMessageId: string | null = null
   let activeChatId: string | null = ctx.getActiveChat().chatId
   let currentPlan: MessagePlan | null = null
+  let openBreakoutMessageId: string | null = null
   let settingsPayload: SettingsBootstrapPayload | null = null
   let draftSettings: UserSettings | null = null
   let settingsStatus = 'Loading settings...'
   let settingsSaveInFlight = false
+  const playbackModeOverrides = new Map<string, PlaybackMode>()
+  let longPressTimer: number | null = null
+  let hoverOpenTimer: number | null = null
+  let hoverCloseTimer: number | null = null
+  const supportsHover =
+    typeof window.matchMedia === 'function'
+      ? window.matchMedia('(hover: hover) and (pointer: fine)').matches
+      : true
 
   const removeStyle = ctx.dom.addStyle(`
     .lummate-phase1-control {
       display: flex;
       align-items: center;
       margin-left: 6px;
+      position: relative;
     }
     .lummate-phase1-button {
       appearance: none;
@@ -194,6 +207,30 @@ export function setup(ctx: SpindleFrontendContext) {
       height: 14px;
       display: block;
     }
+    .lummate-phase1-menu-button {
+      appearance: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid rgba(148, 163, 184, 0.18);
+      background: transparent;
+      color: rgba(191, 219, 254, 0.9);
+      border-radius: 8px;
+      width: 24px;
+      height: 24px;
+      margin-left: 4px;
+      padding: 0;
+      cursor: pointer;
+    }
+    .lummate-phase1-menu-button:hover {
+      background: rgba(30, 41, 59, 0.42);
+      border-color: rgba(148, 163, 184, 0.35);
+    }
+    .lummate-phase1-menu-button svg {
+      width: 12px;
+      height: 12px;
+      display: block;
+    }
     .lummate-phase1-status {
       display: none;
     }
@@ -215,6 +252,56 @@ export function setup(ctx: SpindleFrontendContext) {
     }
     .lummate-phase1-preview[data-visible="false"] {
       display: none;
+    }
+    .lummate-phase1-breakout {
+      position: absolute;
+      top: calc(100% + 8px);
+      right: 0;
+      min-width: 220px;
+      display: none;
+      flex-direction: column;
+      gap: 10px;
+      padding: 10px;
+      border-radius: 12px;
+      border: 1px solid rgba(148, 163, 184, 0.2);
+      background: rgba(2, 6, 23, 0.96);
+      box-shadow: 0 16px 30px rgba(2, 6, 23, 0.36);
+      z-index: 30;
+    }
+    .lummate-phase1-breakout[data-open="true"] {
+      display: flex;
+    }
+    .lummate-phase1-breakout-title {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: rgba(148, 163, 184, 0.9);
+    }
+    .lummate-phase1-breakout-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .lummate-phase1-breakout-action,
+    .lummate-phase1-mode-button {
+      appearance: none;
+      border: 1px solid rgba(148, 163, 184, 0.2);
+      background: rgba(15, 23, 42, 0.78);
+      color: rgba(226, 232, 240, 0.95);
+      border-radius: 10px;
+      padding: 6px 10px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .lummate-phase1-mode-button[data-active="true"] {
+      background: rgba(14, 116, 144, 0.24);
+      color: #67e8f9;
+      border-color: rgba(103, 232, 249, 0.45);
+    }
+    .lummate-phase1-breakout-action:hover,
+    .lummate-phase1-mode-button:hover {
+      border-color: rgba(148, 163, 184, 0.38);
     }
     .lummate-settings-root {
       display: flex;
@@ -362,6 +449,69 @@ export function setup(ctx: SpindleFrontendContext) {
     }
   }
 
+  function closeBreakout() {
+    openBreakoutMessageId = null
+    for (const [messageId, panel] of breakoutPanels.entries()) {
+      panel.dataset.open = messageId === openBreakoutMessageId ? 'true' : 'false'
+    }
+  }
+
+  function openBreakout(messageId: string) {
+    openBreakoutMessageId = messageId
+    for (const [id, panel] of breakoutPanels.entries()) {
+      panel.dataset.open = id === messageId ? 'true' : 'false'
+    }
+  }
+
+  function clearHoverTimers() {
+    if (hoverOpenTimer !== null) {
+      window.clearTimeout(hoverOpenTimer)
+      hoverOpenTimer = null
+    }
+    if (hoverCloseTimer !== null) {
+      window.clearTimeout(hoverCloseTimer)
+      hoverCloseTimer = null
+    }
+  }
+
+  function scheduleBreakoutOpen(messageId: string) {
+    if (hoverCloseTimer !== null) {
+      window.clearTimeout(hoverCloseTimer)
+      hoverCloseTimer = null
+    }
+    if (hoverOpenTimer !== null) {
+      window.clearTimeout(hoverOpenTimer)
+    }
+    hoverOpenTimer = window.setTimeout(() => {
+      openBreakout(messageId)
+      updateBreakoutModeButtons(messageId)
+      hoverOpenTimer = null
+    }, 180)
+  }
+
+  function scheduleBreakoutClose(messageId: string) {
+    if (hoverOpenTimer !== null) {
+      window.clearTimeout(hoverOpenTimer)
+      hoverOpenTimer = null
+    }
+    if (hoverCloseTimer !== null) {
+      window.clearTimeout(hoverCloseTimer)
+    }
+    hoverCloseTimer = window.setTimeout(() => {
+      if (openBreakoutMessageId === messageId) {
+        closeBreakout()
+      }
+      hoverCloseTimer = null
+    }, 260)
+  }
+
+  function getPlaybackModeForMessage(messageId: string): PlaybackMode {
+    const override = playbackModeOverrides.get(messageId)
+    if (override) return override
+    if (currentPlan?.messageId === messageId) return currentPlan.playbackMode
+    return 'hold'
+  }
+
   function syncActiveChat() {
     const nextChatId = ctx.getActiveChat().chatId
     if (nextChatId === activeChatId) return
@@ -392,6 +542,17 @@ export function setup(ctx: SpindleFrontendContext) {
     if (!beat) return null
 
     return `${beat.actionType} ${Math.round(beat.amplitude)}/${Math.round(beat.tempo)} ${plan.playbackMode}`
+  }
+
+  function updateBreakoutModeButtons(messageId: string) {
+    const panel = breakoutPanels.get(messageId)
+    if (!panel) return
+
+    const activeMode = getPlaybackModeForMessage(messageId)
+    for (const element of panel.querySelectorAll('.lummate-phase1-mode-button')) {
+      if (!(element instanceof HTMLButtonElement)) continue
+      element.dataset.active = element.dataset.mode === activeMode ? 'true' : 'false'
+    }
   }
 
   function setSettingsStatus(nextStatus: string) {
@@ -936,17 +1097,38 @@ export function setup(ctx: SpindleFrontendContext) {
               <path d="M5 3.5v9l7-4.5-7-4.5Z" fill="currentColor" />
             </svg>
           </button>
+          <button type="button" class="lummate-phase1-menu-button" title="More actions" aria-label="More actions">
+            <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <circle cx="3.5" cy="8" r="1.2" fill="currentColor" />
+              <circle cx="8" cy="8" r="1.2" fill="currentColor" />
+              <circle cx="12.5" cy="8" r="1.2" fill="currentColor" />
+            </svg>
+          </button>
           <span class="lummate-phase1-status" aria-hidden="true">Phase 1 ready</span>
           <span class="lummate-phase1-preview" data-visible="false" aria-hidden="true"></span>
+          <div class="lummate-phase1-breakout" data-open="false">
+            <div class="lummate-phase1-breakout-title">Playback</div>
+            <div class="lummate-phase1-breakout-row">
+              <button type="button" class="lummate-phase1-mode-button" data-mode="once">Play Once</button>
+              <button type="button" class="lummate-phase1-mode-button" data-mode="loop">Loop</button>
+              <button type="button" class="lummate-phase1-mode-button" data-mode="hold">Play & Hold</button>
+            </div>
+            <div class="lummate-phase1-breakout-title">Actions</div>
+            <div class="lummate-phase1-breakout-row">
+              <button type="button" class="lummate-phase1-breakout-action" data-action="regenerate">Regenerate</button>
+            </div>
+          </div>
         </div>
       `,
       'beforeend',
     )
 
     const button = wrapper.querySelector('.lummate-phase1-button') as HTMLButtonElement | null
+    const menuButton = wrapper.querySelector('.lummate-phase1-menu-button') as HTMLButtonElement | null
     const status = wrapper.querySelector('.lummate-phase1-status') as HTMLElement | null
     const preview = wrapper.querySelector('.lummate-phase1-preview') as HTMLElement | null
-    if (!button || !status || !preview) {
+    const breakout = wrapper.querySelector('.lummate-phase1-breakout') as HTMLElement | null
+    if (!button || !menuButton || !status || !preview || !breakout) {
       ctx.dom.uninject(wrapper)
       return
     }
@@ -955,16 +1137,115 @@ export function setup(ctx: SpindleFrontendContext) {
       status.textContent = 'Contacting backend...'
       ctx.sendToBackend({
         type: 'lummate.phase1.play_toggle',
-        payload: { chatId: activeChatId, messageId },
+        payload: {
+          chatId: activeChatId,
+          messageId,
+          playbackModeOverride: getPlaybackModeForMessage(messageId),
+        },
       })
+    })
+
+    menuButton.addEventListener('click', (event) => {
+      event.stopPropagation()
+      if (openBreakoutMessageId === messageId) {
+        closeBreakout()
+      } else {
+        openBreakout(messageId)
+        updateBreakoutModeButtons(messageId)
+      }
+    })
+
+    if (supportsHover) {
+      wrapper.addEventListener('mouseenter', () => {
+        scheduleBreakoutOpen(messageId)
+      })
+
+      wrapper.addEventListener('mouseleave', () => {
+        scheduleBreakoutClose(messageId)
+      })
+
+      breakout.addEventListener('mouseenter', () => {
+        if (hoverCloseTimer !== null) {
+          window.clearTimeout(hoverCloseTimer)
+          hoverCloseTimer = null
+        }
+        if (openBreakoutMessageId !== messageId) {
+          openBreakout(messageId)
+          updateBreakoutModeButtons(messageId)
+        }
+      })
+
+      breakout.addEventListener('mouseleave', () => {
+        scheduleBreakoutClose(messageId)
+      })
+    }
+
+    button.addEventListener('touchstart', () => {
+      if (longPressTimer !== null) {
+        window.clearTimeout(longPressTimer)
+      }
+      longPressTimer = window.setTimeout(() => {
+        openBreakout(messageId)
+        updateBreakoutModeButtons(messageId)
+      }, 450)
+    })
+
+    const clearLongPress = () => {
+      if (longPressTimer !== null) {
+        window.clearTimeout(longPressTimer)
+        longPressTimer = null
+      }
+    }
+
+    button.addEventListener('touchend', clearLongPress)
+    button.addEventListener('touchcancel', clearLongPress)
+
+    breakout.addEventListener('click', (event) => {
+      const targetElement = event.target instanceof HTMLElement ? event.target : null
+      if (!targetElement) return
+
+      const modeButton = targetElement.closest('.lummate-phase1-mode-button') as HTMLButtonElement | null
+      if (modeButton) {
+        const mode = modeButton.dataset.mode
+        if (mode === 'once' || mode === 'loop' || mode === 'hold') {
+          playbackModeOverrides.set(messageId, mode)
+          updateBreakoutModeButtons(messageId)
+          if (currentPlan?.messageId === messageId) {
+            ctx.sendToBackend({
+              type: 'lummate.phase3.set_playback_mode',
+              payload: { chatId: activeChatId, messageId, playbackMode: mode },
+            })
+          } else {
+            syncVisuals()
+          }
+        }
+        return
+      }
+
+      const actionButton = targetElement.closest('.lummate-phase1-breakout-action') as HTMLButtonElement | null
+      if (actionButton?.dataset.action === 'regenerate') {
+        status.textContent = 'Regenerating...'
+        ctx.sendToBackend({
+          type: 'lummate.phase3.regenerate',
+          payload: {
+            chatId: activeChatId,
+            messageId,
+            playbackModeOverride: getPlaybackModeForMessage(messageId),
+          },
+        })
+        closeBreakout()
+      }
     })
 
     injections.set(messageId, wrapper)
     buttons.set(messageId, button)
+    menuButtons.set(messageId, menuButton)
     statusLabels.set(messageId, status)
     previewLabels.set(messageId, preview)
+    breakoutPanels.set(messageId, breakout)
     targets.set(messageId, target)
     updateMessageVisual(messageId)
+    updateBreakoutModeButtons(messageId)
   }
 
   function scanMessages() {
@@ -980,6 +1261,9 @@ export function setup(ctx: SpindleFrontendContext) {
     activeMessageId = payload.session.activeMessageId
     currentPlan = payload.session.runtimePlans.currentPlan
     syncVisuals()
+    for (const messageId of breakoutPanels.keys()) {
+      updateBreakoutModeButtons(messageId)
+    }
   }
 
   function applySettingsBootstrap(payload: SettingsBootstrapPayload, saved: boolean) {
@@ -1040,6 +1324,7 @@ export function setup(ctx: SpindleFrontendContext) {
     inputAction.destroy()
     settingsTab.destroy()
     clearSettingsComponents()
+    clearHoverTimers()
     removeStyle()
 
     for (const wrapper of injections.values()) {
@@ -1048,8 +1333,10 @@ export function setup(ctx: SpindleFrontendContext) {
 
     injections.clear()
     buttons.clear()
+    menuButtons.clear()
     statusLabels.clear()
     previewLabels.clear()
+    breakoutPanels.clear()
     targets.clear()
   }
 }

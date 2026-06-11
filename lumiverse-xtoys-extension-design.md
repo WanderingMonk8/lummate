@@ -82,13 +82,18 @@ Examples:
 
 ## Combined Actor-Actee Resolution
 
-The final tactile result of a beat should be resolved from both the actor and the actee.
+The final tactile result of a beat should be resolved from all actor-side participants together with the actee-side participant.
 
 Every action is a combined physical result, even when one side is clearly leading.
 
-The actor and actee should be processed through the same contribution pipeline.
+The actor side may contain:
 
-That means both sides use the same general structure for:
+- one actor
+- multiple coordinated actors
+
+All actor-side and actee-side participants should be processed through the same contribution pipeline.
+
+That means every participant uses the same general structure for:
 
 - profile traits
 - current state
@@ -104,9 +109,10 @@ Examples:
 
 This can take several forms:
 
-- the actor dictates most of the action
-- the actee meets the actor's action
-- the actee backs away from the actor's action
+- a single actor dictates most of the action
+- multiple actors jointly shape the action
+- the actee meets the actors' action
+- the actee backs away from the actors' action
 
 Example:
 
@@ -131,7 +137,7 @@ Every beat should consider both sides, but one side may have a greater influence
 
 Recommended internal fields:
 
-- `actor_weight`
+- `actor_weights`
 - `actee_weight`
 - `response_mode`
 
@@ -142,17 +148,18 @@ The simplest implementation model is a normalized weighted combination.
 
 Example:
 
-`final_result = (actor_weight * actor_contribution) + (actee_weight * actee_contribution)`
+`final_result = sum(actor_i_weight * actor_i_contribution) + (actee_weight * actee_contribution)`
 
 With the constraint that:
 
-`actor_weight + actee_weight = 1.0`
+`sum(actor_i_weight) + actee_weight = 1.0`
 
 This allows straightforward cases such as:
 
 - `0.5 * actor + 0.5 * actee`
 - `0.7 * actor + 0.3 * actee`
-- `0.9 * actor + 0.1 * actee`
+- `0.4 * actor_a + 0.2 * actor_b + 0.4 * actee`
+- `0.3 * actor_a + 0.3 * actor_b + 0.4 * actee`
 
 The parser should infer these weights from the scene language and response mode.
 
@@ -164,7 +171,7 @@ Examples:
 
 ## Shared Contribution Pipeline
 
-The extension should use one reusable participant-contribution function for both actor and actee.
+The extension should use one reusable participant-contribution function for every participant, whether that participant is an actor or the actee.
 
 Conceptually:
 
@@ -172,11 +179,19 @@ Conceptually:
 
 Then:
 
-- compute `actor_contribution` with that shared pipeline
+- compute each `actor_i_contribution` with that shared pipeline
 - compute `actee_contribution` with that same pipeline
-- combine them through weights and response effects
+- combine them through normalized weights and response effects
 
 This keeps the implementation simpler and ensures that user profiles and character profiles behave consistently.
+
+If multiple actors are involved in the same beat, each one should have:
+
+- its own character profile
+- its own current state
+- its own contribution weight
+
+Those actor-side contributions are then summed together with the actee-side contribution.
 
 ## Additive and Subtractive Response Effects
 
@@ -190,7 +205,7 @@ The extension should separately model whether the actee:
 
 Recommended implementation model:
 
-`final_result = (actor_weight * actor_contribution) + (actee_weight * actee_modifier * actee_contribution)`
+`final_result = sum(actor_i_weight * actor_i_contribution) + (actee_weight * actee_modifier * actee_contribution)`
 
 Where `actee_modifier` is determined by the parsed response mode.
 

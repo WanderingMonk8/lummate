@@ -7,6 +7,7 @@ import type {
   ConnectionProfileSummary,
   FrontendToBackendMessage,
   MessagePlan,
+  PlaybackMode,
   ResolvedBeat,
   SemanticBeat,
   SessionState,
@@ -180,14 +181,19 @@ function detectDurationClass(content: string): SemanticBeat['durationClass'] {
   return 'medium'
 }
 
-function detectPersistence(content: string, preset: ActionCalibrationPreset): string {
+function detectPersistence(
+  content: string,
+  preset: ActionCalibrationPreset,
+  playbackModeOverride: PlaybackMode | null,
+): string {
   const normalized = content.toLowerCase()
 
   if (/(pulls away|stops|withdraws|lets go|breaks contact)\b/.test(normalized)) return 'stop'
   if (/(one |single |once)\b/.test(normalized)) return 'instant'
   if (/(continue|keeps|keeping|still|ongoing)\b/.test(normalized)) return 'ongoing'
-  if (preset.repeatStyle === 'hold') return 'sustained'
-  if (preset.repeatStyle === 'loop') return 'ongoing'
+  const effectiveMode = playbackModeOverride ?? preset.repeatStyle
+  if (effectiveMode === 'hold') return 'sustained'
+  if (effectiveMode === 'loop') return 'ongoing'
   return 'brief'
 }
 
@@ -216,6 +222,7 @@ async function buildMessagePlan(
   messageId: string,
   settings: UserSettings,
   session: SessionState,
+  playbackModeOverride: PlaybackMode | null,
 ): Promise<MessagePlan> {
   const messages = await spindle.chat.getMessages(chatId)
   const selected = messages.find((message) => message.id === messageId)
@@ -248,7 +255,7 @@ async function buildMessagePlan(
     frequency: detectTempo(selected.content, preset),
     durationClass: detectDurationClass(selected.content),
     durationMs: detectDurationMs(selected.content),
-    persistence: detectPersistence(selected.content, preset),
+    persistence: detectPersistence(selected.content, preset, playbackModeOverride),
     responseMode: 'lead',
     actorWeight: 0.5,
     acteeWeight: 0.5,
@@ -275,7 +282,7 @@ async function buildMessagePlan(
   return {
     messageId,
     createdAt: new Date().toISOString(),
-    playbackMode: preset.repeatStyle,
+    playbackMode: playbackModeOverride ?? preset.repeatStyle,
     semanticBeats: [semanticBeat],
     resolvedBeats: [resolvedBeat],
     continuityVerdict,
@@ -327,6 +334,7 @@ async function handleFrontendMessage(
             payload.payload.messageId,
             settings,
             current,
+            payload.payload.playbackModeOverride ?? null,
           )
 
           nextRuntimePlans.previousPlan = current.runtimePlans.currentPlan
@@ -344,6 +352,76 @@ async function handleFrontendMessage(
             armed: nextActiveMessageId !== null,
           },
           runtimePlans: nextRuntimePlans,
+        }
+
+        runtimeSessions.set(userId, nextSession)
+        activeChatIds.set(userId, payload.payload.chatId)
+
+        const bootstrap = await buildBootstrap(userId, payload.payload.chatId)
+        sendToUser(
+          {
+            type: 'lummate.phase1.session_state',
+            payload: bootstrap,
+          },
+          userId,
+        )
+        return
+      }
+      case 'lummate.phase3.regenerate': {
+        if (!payload.payload.chatId) {
+          throw new Error('Cannot regenerate a plan without an active chat')
+        }
+
+        const current = syncSessionToChat(userId, payload.payload.chatId)
+        const settings = await readUserSettings(spindle, userId)
+        const regeneratedPlan = await buildMessagePlan(
+          payload.payload.chatId,
+          payload.payload.messageId,
+          settings,
+          current,
+          payload.payload.playbackModeOverride ?? null,
+        )
+
+        const nextSession: SessionState = {
+          ...current,
+          activeChatId: payload.payload.chatId,
+          lastUpdatedAt: new Date().toISOString(),
+          runtimePlans: {
+            ...current.runtimePlans,
+            currentPlan: regeneratedPlan,
+          },
+        }
+
+        runtimeSessions.set(userId, nextSession)
+        activeChatIds.set(userId, payload.payload.chatId)
+
+        const bootstrap = await buildBootstrap(userId, payload.payload.chatId)
+        sendToUser(
+          {
+            type: 'lummate.phase1.session_state',
+            payload: bootstrap,
+          },
+          userId,
+        )
+        return
+      }
+      case 'lummate.phase3.set_playback_mode': {
+        const current = syncSessionToChat(userId, payload.payload.chatId)
+        const currentPlan = current.runtimePlans.currentPlan
+
+        const nextSession: SessionState = {
+          ...current,
+          lastUpdatedAt: new Date().toISOString(),
+          runtimePlans: {
+            ...current.runtimePlans,
+            currentPlan:
+              currentPlan && currentPlan.messageId === payload.payload.messageId
+                ? {
+                    ...currentPlan,
+                    playbackMode: payload.payload.playbackMode,
+                  }
+                : currentPlan,
+          },
         }
 
         runtimeSessions.set(userId, nextSession)

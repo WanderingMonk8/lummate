@@ -12,18 +12,23 @@ The project is currently focused on the Lumiverse-side architecture for:
 
 ## Current Status
 
-This repository is now in early implementation.
+This repository is now in active early implementation.
 
-The Phase 1 Lumiverse Spindle scaffold is working locally and has been verified in Lumiverse far enough to confirm:
+The Lumiverse-side extension has been verified in Lumiverse far enough to confirm:
 
 - the extension installs successfully
 - the frontend loads successfully
 - a custom per-message action button can be injected into the native message action row
 - frontend/backend messaging and runtime per-chat session plumbing are working
+- per-message breakout controls work on desktop hover and mobile long-press
+- the hidden parser-session arming/disarming lifecycle is implemented
 - a Lummate settings drawer is available for parser connection selection, XToys action-name mapping, and Lumiverse-side tactile calibration presets
-- a first heuristic planner stub runs on Play and surfaces a visible per-message plan preview for verification
+- participant tactile profiles are derived, cached, regenerable, and reused
+- group chats can cache more than one character profile when Lumiverse exposes the participant roster
+- a heuristic planner stub runs on Play and produces runtime message plans
+- current physical/emotional state parsing is implemented heuristically with baseline fallback and verification debug output
 
-The project is still pre-LLM-parser and pre-XToys-runtime-integration, but the extension shell is now active, inspectable, and testable inside Lumiverse.
+The project is still pre-LLM semantic parsing and pre-XToys runtime integration, but the Lumiverse-side shell, state model, profile cache, and verification surfaces are now active and testable inside Lumiverse.
 
 The main working documents are:
 
@@ -42,8 +47,8 @@ The planned extension will:
 
 ## Near-Term Goals
 
-- expand the working scaffold into parser-aware message actions
 - replace the heuristic planner stub with LLM-backed semantic parsing
 - deepen semantic beat parsing and multi-beat message plan generation
-- add participant profile caching and richer state parsing
+- improve participant-aware state attribution and contact filtering with structured parser output
 - integrate XToys webhook command dispatch
+- remove temporary debug surfaces once each implementation phase is validated

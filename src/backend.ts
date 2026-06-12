@@ -9,6 +9,8 @@ import type {
   MessagePlan,
   PlaybackMode,
   ParticipantProfileBundle,
+  ParticipantStateAssignment,
+  ParticipantState,
   ResolvedBeat,
   SemanticBeat,
   SessionState,
@@ -178,6 +180,17 @@ function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value))
 }
 
+function createBaselineParticipantState(messageId: string): ParticipantState {
+  return {
+    arousal: 50,
+    energy: 50,
+    steadiness: 50,
+    focus: 50,
+    provenance: 'baseline',
+    sourceMessageId: messageId,
+  }
+}
+
 function detectActionType(content: string): ActionType {
   const normalized = content.toLowerCase()
 
@@ -247,6 +260,293 @@ function detectPersistence(
   return 'brief'
 }
 
+function applyParticipantStateCue(
+  state: ParticipantState,
+  matched: { arousal?: number; energy?: number; steadiness?: number; focus?: number },
+) {
+  if (matched.arousal != null) state.arousal = clamp(state.arousal + matched.arousal, 0, 100)
+  if (matched.energy != null) state.energy = clamp(state.energy + matched.energy, 0, 100)
+  if (matched.steadiness != null) state.steadiness = clamp(state.steadiness + matched.steadiness, 0, 100)
+  if (matched.focus != null) state.focus = clamp(state.focus + matched.focus, 0, 100)
+}
+
+function detectParticipantState(
+  content: string,
+  messageId: string,
+  role: 'actor' | 'actee',
+): ParticipantState {
+  const normalized = content.toLowerCase()
+  const state = createBaselineParticipantState(messageId)
+  let matched = false
+
+  const roleAnchors =
+    role === 'actor'
+      ? ['he', 'she', 'they', 'his', 'her', 'their', 'partner', 'man', 'woman']
+      : ['you', 'your', 'yours', 'yourself']
+
+  const scopedCue = (
+    cuePattern: RegExp,
+    values: { arousal?: number; energy?: number; steadiness?: number; focus?: number },
+  ) => {
+    const matchedScope = roleAnchors.some((anchor) =>
+      new RegExp(`\\b${anchor}\\b[^.!?]{0,28}${cuePattern.source}|${cuePattern.source}[^.!?]{0,28}\\b${anchor}\\b`, 'i').test(
+        normalized,
+      ),
+    )
+
+    if (matchedScope) {
+      matched = true
+      applyParticipantStateCue(state, values)
+    }
+  }
+
+  scopedCue(/\b(aroused|needy|desperate|hungry|aching|worked up|heated)\b/i, {
+    arousal: 22,
+    focus: 8,
+  })
+  scopedCue(/\b(tired|exhausted|drained|spent|sedated|weary)\b/i, {
+    energy: -25,
+    steadiness: -10,
+  })
+  scopedCue(/\b(well-rested|rested|steady|composed|collected)\b/i, {
+    energy: 18,
+    steadiness: 12,
+  })
+  scopedCue(/\b(shaky|trembling|tremble|quivering|unsteady)\b/i, {
+    steadiness: -24,
+    arousal: 10,
+  })
+  scopedCue(/\b(focused|intent|locked in|attentive|careful)\b/i, {
+    focus: 22,
+  })
+  scopedCue(/\b(overwhelmed|dazed|dizzy|foggy|overstimulated)\b/i, {
+    focus: -22,
+    steadiness: -10,
+  })
+
+  if (!matched) {
+    const genericCueMap: Array<
+      [RegExp, { arousal?: number; energy?: number; steadiness?: number; focus?: number }]
+    > = [
+      [/\b(aroused|needy|desperate|hungry|aching|worked up|heated)\b/i, { arousal: 16, focus: 6 }],
+      [/\b(tired|exhausted|drained|spent|sedated|weary)\b/i, { energy: -18, steadiness: -8 }],
+      [/\b(well-rested|rested|steady|composed|collected)\b/i, { energy: 12, steadiness: 10 }],
+      [/\b(shaky|trembling|tremble|quivering|unsteady)\b/i, { steadiness: -18, arousal: 8 }],
+      [/\b(focused|intent|locked in|attentive|careful)\b/i, { focus: 16 }],
+      [/\b(overwhelmed|dazed|dizzy|foggy|overstimulated)\b/i, { focus: -18, steadiness: -8 }],
+    ]
+
+    for (const [pattern, values] of genericCueMap) {
+      if (pattern.test(normalized)) {
+        matched = true
+        applyParticipantStateCue(state, values)
+      }
+    }
+  }
+
+  if (matched) {
+    state.provenance = 'parsed'
+  }
+
+  return state
+}
+
+function inferUserLikelySide(content: string): 'actor' | 'actee' {
+  const normalized = content.toLowerCase()
+
+  if (
+    /\byou\b[^.!?]{0,24}\b(thrust|stroke|grind|lick|suck|ride|press|fuck|tease|rub|kiss|slide)\b/i.test(
+      normalized,
+    )
+  ) {
+    return 'actor'
+  }
+
+  if (
+    /\b(into|against|on|over|beneath|inside|toward)\s+you\b|\byour\b/i.test(normalized)
+  ) {
+    return 'actee'
+  }
+
+  return 'actee'
+}
+
+function includesUserGenitalPath(content: string): boolean {
+  const normalized = content.toLowerCase()
+
+  const userTerms = /\b(you|your|yours|yourself)\b/
+  const genitalTerms = /\b(cock|dick|clit|clitoris|pussy|cunt|vagina|penis|shaft|tip|entrance|hole)\b/
+  const contactTerms =
+    /\b(stroke|thrust|grind|lick|suck|ride|press|fuck|tease|rub|kiss|slide|suction|squeeze|pulse)\b/
+
+  if (userTerms.test(normalized) && genitalTerms.test(normalized) && contactTerms.test(normalized)) {
+    return true
+  }
+
+  if (/\b(thrust into you|stroke you|lick you|suck you|ride you|grind on you|fuck you)\b/i.test(normalized)) {
+    return true
+  }
+
+  if (/\byou\b[^.!?]{0,32}\b(thrust|stroke|grind|lick|suck|ride|press|fuck|tease|rub|slide)\b/i.test(normalized)) {
+    return true
+  }
+
+  return false
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function findContactLinkedCharacterProfiles(
+  content: string,
+  characterProfiles: ParticipantProfileBundle['characterProfiles'],
+  userSide: 'actor' | 'actee',
+): ParticipantProfileBundle['characterProfiles'] {
+  if (characterProfiles.length <= 1) {
+    return characterProfiles
+  }
+
+  const normalized = content.toLowerCase()
+  const mentioned = characterProfiles.filter((profile) => {
+    const fullNamePattern = new RegExp(`\\b${escapeRegExp(profile.displayName.toLowerCase())}\\b`, 'i')
+    if (fullNamePattern.test(normalized)) return true
+
+    const tokens = profile.displayName
+      .toLowerCase()
+      .split(/\s+/)
+      .map((token) => token.trim())
+      .filter((token) => token.length >= 3)
+
+    return tokens.some((token) => new RegExp(`\\b${escapeRegExp(token)}\\b`, 'i').test(normalized))
+  })
+
+  if (mentioned.length > 0) {
+    return mentioned
+  }
+
+  const pluralCue =
+    userSide === 'actor'
+      ? /\b(them|both|two|all|each|together|their)\b/i
+      : /\b(they|them|both|two|all|each|their|together)\b/i
+
+  if (pluralCue.test(normalized)) {
+    return characterProfiles
+  }
+
+  return characterProfiles.slice(0, 1)
+}
+
+function buildParticipantStateAssignments(
+  messageId: string,
+  content: string,
+  participantProfiles: ParticipantProfileBundle,
+): ParticipantStateAssignment[] {
+  if (!includesUserGenitalPath(content)) {
+    return []
+  }
+
+  const actorTemplate = detectParticipantState(content, messageId, 'actor')
+  const acteeTemplate = detectParticipantState(content, messageId, 'actee')
+  const assignments: ParticipantStateAssignment[] = []
+
+  const userProfile = participantProfiles.userProfile
+  const userSide = inferUserLikelySide(content)
+  const characterProfiles = findContactLinkedCharacterProfiles(
+    content,
+    participantProfiles.characterProfiles,
+    userSide,
+  )
+
+  const actorParticipants: Array<{
+    participantId: string | null
+    participantKind: ParticipantStateAssignment['participantKind']
+    displayName: string
+    isUserPersona: boolean
+  }> = []
+
+  const acteeParticipants: Array<{
+    participantId: string | null
+    participantKind: ParticipantStateAssignment['participantKind']
+    displayName: string
+    isUserPersona: boolean
+  }> = []
+
+  if (userProfile) {
+    const participant = {
+      participantId: userProfile.participantId,
+      participantKind: userProfile.participantKind,
+      displayName: userProfile.displayName,
+      isUserPersona: true,
+    }
+
+    if (userSide === 'actor') {
+      actorParticipants.push(participant)
+    } else {
+      acteeParticipants.push(participant)
+    }
+  }
+
+  for (const profile of characterProfiles) {
+    const participant = {
+      participantId: profile.participantId,
+      participantKind: profile.participantKind,
+      displayName: profile.displayName,
+      isUserPersona: false,
+    }
+
+    if (userProfile) {
+      if (userSide === 'actor') {
+        acteeParticipants.push(participant)
+      } else {
+        actorParticipants.push(participant)
+      }
+    } else {
+      actorParticipants.push(participant)
+    }
+  }
+
+  if (!userProfile && actorParticipants.length === 0 && acteeParticipants.length === 0) {
+    actorParticipants.push({
+      participantId: null,
+      participantKind: null,
+      displayName: 'Unknown actor',
+      isUserPersona: false,
+    })
+    acteeParticipants.push({
+      participantId: null,
+      participantKind: null,
+      displayName: 'Unknown actee',
+      isUserPersona: false,
+    })
+  }
+
+  const pushAssignments = (
+    side: 'actor' | 'actee',
+    participants: typeof actorParticipants,
+    template: ParticipantState,
+  ) => {
+    if (participants.length === 0) return
+    const weight = Number((1 / participants.length).toFixed(4))
+
+    for (const participant of participants) {
+      assignments.push({
+        participantId: participant.participantId,
+        participantKind: participant.participantKind,
+        displayName: participant.displayName,
+        side,
+        weight,
+        isUserPersona: participant.isUserPersona,
+        state: { ...template },
+      })
+    }
+  }
+
+  pushAssignments('actor', actorParticipants, actorTemplate)
+  pushAssignments('actee', acteeParticipants, acteeTemplate)
+  return assignments
+}
+
 function resolveContinuityVerdict(
   previousPlan: MessagePlan | null,
   actionType: ActionType,
@@ -312,7 +612,7 @@ async function buildMessagePlan(
   session: SessionState,
   playbackModeOverride: PlaybackMode | null,
 ): Promise<MessagePlan> {
-  await getParticipantProfilesSafely(userId, chatId, characterId)
+  const participantProfiles = await getParticipantProfilesSafely(userId, chatId, characterId)
 
   const messages = await spindle.chat.getMessages(chatId)
   const selected = messages.find((message) => message.id === messageId)
@@ -368,11 +668,17 @@ async function buildMessagePlan(
 
   const continuityVerdict = resolveContinuityVerdict(session.runtimePlans.currentPlan, actionType)
   const transitionMode = resolveTransitionMode(continuityVerdict)
+  const participantStates = buildParticipantStateAssignments(
+    messageId,
+    selected.content,
+    participantProfiles,
+  )
 
   return {
     messageId,
     createdAt: new Date().toISOString(),
     playbackMode: playbackModeOverride ?? preset.repeatStyle,
+    participantStates,
     semanticBeats: [semanticBeat],
     resolvedBeats: [resolvedBeat],
     continuityVerdict,

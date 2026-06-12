@@ -36,7 +36,8 @@ const CALIBRATION_EXECUTION_PROFILES = [
 ] as const
 
 const SHOW_PHASE4_DEBUG = false
-const SHOW_PHASE5_DEBUG = false
+const SHOW_PHASE5_DEBUG = true
+const SHOW_PHASE6_DEBUG = true
 
 const CONTROL_SELECTOR = '.lummate-phase1-control'
 const ACTION_ROW_SELECTORS = [
@@ -155,7 +156,6 @@ export function setup(ctx: SpindleFrontendContext) {
   const buttons = new Map<string, HTMLButtonElement>()
   const menuButtons = new Map<string, HTMLButtonElement>()
   const statusLabels = new Map<string, HTMLElement>()
-  const previewLabels = new Map<string, HTMLElement>()
   const breakoutPanels = new Map<string, HTMLElement>()
   const targets = new Map<string, Element>()
   const settingsComponents: Array<SpindleMountedComponent<unknown>> = []
@@ -240,25 +240,6 @@ export function setup(ctx: SpindleFrontendContext) {
       display: block;
     }
     .lummate-phase1-status {
-      display: none;
-    }
-    .lummate-phase1-preview {
-      display: inline-flex;
-      align-items: center;
-      max-width: 190px;
-      margin-left: 8px;
-      padding: 3px 8px;
-      border-radius: 999px;
-      border: 1px solid rgba(148, 163, 184, 0.2);
-      background: rgba(15, 23, 42, 0.36);
-      color: rgba(191, 219, 254, 0.92);
-      font-size: 11px;
-      line-height: 1;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-    .lummate-phase1-preview[data-visible="false"] {
       display: none;
     }
     .lummate-phase1-breakout {
@@ -494,7 +475,7 @@ export function setup(ctx: SpindleFrontendContext) {
   `)
 
   const debugIndicator = document.createElement('div')
-  if (SHOW_PHASE4_DEBUG || SHOW_PHASE5_DEBUG) {
+  if (SHOW_PHASE4_DEBUG || SHOW_PHASE5_DEBUG || SHOW_PHASE6_DEBUG) {
     debugIndicator.className = 'lummate-phase4-debug'
     debugIndicator.dataset.armed = 'false'
     debugIndicator.innerHTML = `
@@ -506,6 +487,9 @@ export function setup(ctx: SpindleFrontendContext) {
       <div class="lummate-phase5-debug-user">User profile: pending</div>
       <div class="lummate-phase5-debug-character">Character profile: pending</div>
       <div class="lummate-phase5-debug-fingerprint">Fingerprints: -- / --</div>
+      <div class="lummate-phase4-debug-title">Phase 6 Current State</div>
+      <div class="lummate-phase6-debug-actor">Actor states: pending</div>
+      <div class="lummate-phase6-debug-actee">Actee states: pending</div>
     `
     document.body.appendChild(debugIndicator)
   }
@@ -549,21 +533,34 @@ export function setup(ctx: SpindleFrontendContext) {
     return `Character profiles: ${profiles.length} cached`
   }
 
+  function formatParticipantStateAssignments(
+    label: string,
+    plan: MessagePlan | null,
+    side: 'actor' | 'actee',
+  ) {
+    if (!plan) return `${label}: pending`
+
+    const entries = plan.participantStates.filter((entry) => entry.side === side)
+    if (entries.length === 0) return `${label}: none`
+
+    return `${label}: ${entries
+      .map(
+        (entry) =>
+          `${entry.displayName} a${entry.state.arousal} e${entry.state.energy} s${entry.state.steadiness} f${entry.state.focus} (${entry.state.provenance}, w${entry.weight})`,
+      )
+      .join(' | ')}`
+  }
+
   function updateMessageVisual(messageId: string) {
     const button = buttons.get(messageId)
     const status = statusLabels.get(messageId)
-    const preview = previewLabels.get(messageId)
-    if (!button || !status || !preview) return
+    if (!button || !status) return
 
     const isActive = activeMessageId === messageId
     button.dataset.active = isActive ? 'true' : 'false'
     button.title = isActive ? 'Stop actions' : 'Play actions'
     button.setAttribute('aria-label', isActive ? 'Stop actions' : 'Play actions')
     status.textContent = isActive ? 'Phase 1 active' : 'Phase 1 ready'
-
-    const previewText = buildPlanPreview(messageId, currentPlan)
-    preview.dataset.visible = previewText ? 'true' : 'false'
-    preview.textContent = previewText || ''
   }
 
   function syncVisuals() {
@@ -573,7 +570,7 @@ export function setup(ctx: SpindleFrontendContext) {
   }
 
   function updateDebugIndicator() {
-    if (!SHOW_PHASE4_DEBUG && !SHOW_PHASE5_DEBUG) return
+    if (!SHOW_PHASE4_DEBUG && !SHOW_PHASE5_DEBUG && !SHOW_PHASE6_DEBUG) return
 
     const stateNode = debugIndicator.querySelector('.lummate-phase4-debug-state')
     const countNode = debugIndicator.querySelector('.lummate-phase4-debug-count')
@@ -581,6 +578,8 @@ export function setup(ctx: SpindleFrontendContext) {
     const userNode = debugIndicator.querySelector('.lummate-phase5-debug-user')
     const characterNode = debugIndicator.querySelector('.lummate-phase5-debug-character')
     const fingerprintNode = debugIndicator.querySelector('.lummate-phase5-debug-fingerprint')
+    const actorStateNode = debugIndicator.querySelector('.lummate-phase6-debug-actor')
+    const acteeStateNode = debugIndicator.querySelector('.lummate-phase6-debug-actee')
 
     if (SHOW_PHASE4_DEBUG) {
       if (!parserSessionState) {
@@ -617,6 +616,23 @@ export function setup(ctx: SpindleFrontendContext) {
       }
       if (fingerprintNode) {
         fingerprintNode.textContent = `Fingerprints: ${userProfile?.sourceFingerprint?.slice(0, 8) ?? '--'} / ${characterProfiles.map((profile) => profile.sourceFingerprint?.slice(0, 8) ?? '--').join(', ') || '--'}`
+      }
+    }
+
+    if (SHOW_PHASE6_DEBUG) {
+      if (actorStateNode) {
+        actorStateNode.textContent = formatParticipantStateAssignments(
+          'Actor states',
+          currentPlan,
+          'actor',
+        )
+      }
+      if (acteeStateNode) {
+        acteeStateNode.textContent = formatParticipantStateAssignments(
+          'Actee states',
+          currentPlan,
+          'actee',
+        )
       }
     }
   }
@@ -720,15 +736,6 @@ export function setup(ctx: SpindleFrontendContext) {
       xtoysActionMappings: settings.xtoysActionMappings.map((mapping) => ({ ...mapping })),
       actionCalibrationPresets: settings.actionCalibrationPresets.map((preset) => ({ ...preset })),
     }
-  }
-
-  function buildPlanPreview(messageId: string, plan: MessagePlan | null): string | null {
-    if (!plan || plan.messageId !== messageId) return null
-
-    const beat = plan.resolvedBeats[0]
-    if (!beat) return null
-
-    return `${beat.actionType} ${Math.round(beat.amplitude)}/${Math.round(beat.tempo)} ${plan.playbackMode}`
   }
 
   function updateBreakoutModeButtons(messageId: string) {
@@ -1462,7 +1469,6 @@ export function setup(ctx: SpindleFrontendContext) {
             </svg>
           </button>
           <span class="lummate-phase1-status" aria-hidden="true">Phase 1 ready</span>
-          <span class="lummate-phase1-preview" data-visible="false" aria-hidden="true"></span>
           <div class="lummate-phase1-breakout" data-open="false">
             <div class="lummate-phase1-breakout-title">Playback</div>
             <div class="lummate-phase1-breakout-row">
@@ -1483,9 +1489,8 @@ export function setup(ctx: SpindleFrontendContext) {
     const button = wrapper.querySelector('.lummate-phase1-button') as HTMLButtonElement | null
     const menuButton = wrapper.querySelector('.lummate-phase1-menu-button') as HTMLButtonElement | null
     const status = wrapper.querySelector('.lummate-phase1-status') as HTMLElement | null
-    const preview = wrapper.querySelector('.lummate-phase1-preview') as HTMLElement | null
     const breakout = wrapper.querySelector('.lummate-phase1-breakout') as HTMLElement | null
-    if (!button || !menuButton || !status || !preview || !breakout) {
+    if (!button || !menuButton || !status || !breakout) {
       ctx.dom.uninject(wrapper)
       return
     }
@@ -1598,7 +1603,6 @@ export function setup(ctx: SpindleFrontendContext) {
     buttons.set(messageId, button)
     menuButtons.set(messageId, menuButton)
     statusLabels.set(messageId, status)
-    previewLabels.set(messageId, preview)
     breakoutPanels.set(messageId, breakout)
     targets.set(messageId, target)
     updateMessageVisual(messageId)
@@ -1693,7 +1697,7 @@ export function setup(ctx: SpindleFrontendContext) {
     clearSettingsComponents()
     clearHoverTimers()
     removeStyle()
-    if (SHOW_PHASE4_DEBUG || SHOW_PHASE5_DEBUG) {
+    if (SHOW_PHASE4_DEBUG || SHOW_PHASE5_DEBUG || SHOW_PHASE6_DEBUG) {
       debugIndicator.remove()
     }
 
@@ -1705,7 +1709,6 @@ export function setup(ctx: SpindleFrontendContext) {
     buttons.clear()
     menuButtons.clear()
     statusLabels.clear()
-    previewLabels.clear()
     breakoutPanels.clear()
     targets.clear()
   }

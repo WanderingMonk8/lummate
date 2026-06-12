@@ -1,6 +1,7 @@
 export type PlaybackMode = 'once' | 'loop' | 'hold'
 
 export type ParticipantKind = 'character' | 'persona'
+export type ParticipantSide = 'actor' | 'actee'
 export type ResponseMode = 'lead' | 'meet' | 'withdraw' | 'mutual'
 export type ContinuityVerdict = 'continue' | 'progress' | 'modify' | 'replace' | 'stop'
 export type TransitionMode = 'replace' | 'modulate' | 'blend'
@@ -71,6 +72,16 @@ export interface ParticipantState {
   sourceMessageId: string | null
 }
 
+export interface ParticipantStateAssignment {
+  participantId: string | null
+  participantKind: ParticipantKind | null
+  displayName: string
+  side: ParticipantSide
+  weight: number
+  isUserPersona: boolean
+  state: ParticipantState
+}
+
 export interface ParserConnectionSettings {
   parserConnectionId: string | null
   deactivationThreshold: number
@@ -139,6 +150,7 @@ export interface MessagePlan {
   messageId: string
   createdAt: string
   playbackMode: PlaybackMode
+  participantStates: ParticipantStateAssignment[]
   semanticBeats: SemanticBeat[]
   resolvedBeats: ResolvedBeat[]
   continuityVerdict: ContinuityVerdict | null

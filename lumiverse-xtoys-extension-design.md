@@ -118,6 +118,32 @@ Example:
 
 - "She arches her hips meeting his thrusts."
 
+## User-Genital Contact Filtering
+
+Participant inclusion should not start from every participant mentioned in the scene.
+
+Instead, each beat should first be filtered through the question:
+
+`which participants are in direct contact with the user's genital involvement in this beat?`
+
+Recommended rule:
+
+1. identify whether the user's genital is involved in the beat at all
+2. if not, ignore the beat
+3. if yes, trace the participants whose action is directly in contact with that user-genital interaction
+4. include only those participants in the final tactile calculation
+5. normalize weights only across that included subset
+
+This prevents unrelated parallel actions from influencing the tactile result.
+
+Examples:
+
+- if the user uses their genital to act on two other characters, both contacted characters are included
+- if one actor acts on multiple actees and the user is only one of those actees, only the actor-user contact is included
+- if multiple actors are simultaneously acting on the user, all such actors are included together with the user
+
+So the planner should begin by enumerating all participants and then, starting from the user's genital contact, determine which participants are actually connected to that contact chain for the current beat.
+
 ## Response Modes
 
 Each beat should resolve a response mode between the participants.
@@ -1242,6 +1268,50 @@ The following items still need further design:
 - exact XToys payload format
 - exact mapping from action types to XToys pattern families
 - exact user override rules for narrative persistence
+
+## Deferred Features
+
+The following features are intentionally deferred beyond v1:
+
+### Participant Profile Override Editing
+
+The cached participant profile model already distinguishes between:
+
+- source data
+- derived tactile profile values
+- user override values
+
+However, v1 does not need a full editing surface for those overrides.
+
+So for v1:
+
+- participant profiles may be derived, cached, regenerated, and reused
+- the user does not need a dedicated UI for manually editing mechanical-axis override values
+- regeneration should continue to refresh only the derived layer
+
+This feature can be added later as a settings-side editing workflow where users can:
+
+- inspect derived profile axes
+- adjust override deltas per participant
+- reset overrides independently of regeneration
+- view effective values after derived and override layers are combined
+
+### Multi-Toy Character Routing
+
+XToys appears to support connecting one script to multiple toy outputs, but v1 does not need to model per-character toy routing yet.
+
+So for v1:
+
+- tactile planning may assume a single effective toy output path
+- participant weighting and contact filtering may still resolve to one combined tactile result
+- the extension does not need to assign specific characters to specific toys
+
+This feature can be added later as a multi-toy routing layer where:
+
+- different characters in the same scene may be mapped to different toys
+- one beat may resolve into multiple toy-targeted output streams
+- participant inclusion, weighting, and contact filtering may be resolved separately per toy path
+- Lumiverse may choose whether a scene should produce one combined tactile result or several parallel toy-specific results
 
 ## Potential Issues
 

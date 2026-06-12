@@ -2,6 +2,7 @@ export type PlaybackMode = 'once' | 'loop' | 'hold'
 
 export type ParticipantKind = 'character' | 'persona'
 export type ParticipantSide = 'actor' | 'actee'
+export type UserContactZone = 'genitals' | 'anus' | 'mouth' | 'custom'
 export type ResponseMode = 'lead' | 'meet' | 'withdraw' | 'mutual'
 export type ContinuityVerdict = 'continue' | 'progress' | 'modify' | 'replace' | 'stop'
 export type TransitionMode = 'replace' | 'modulate' | 'blend'
@@ -84,6 +85,8 @@ export interface ParticipantStateAssignment {
 
 export interface ParserConnectionSettings {
   parserConnectionId: string | null
+  primaryUserContactZone: UserContactZone
+  customUserContactZone: string
   deactivationThreshold: number
   fallbackBehavior: ParserConnectionFallback
 }
@@ -281,6 +284,8 @@ export const DEFAULT_MECHANICAL_AXES: MechanicalAxes = {
 export const DEFAULT_USER_SETTINGS: UserSettings = {
   parser: {
     parserConnectionId: null,
+    primaryUserContactZone: 'genitals',
+    customUserContactZone: '',
     deactivationThreshold: 3,
     fallbackBehavior: 'default_connection',
   },

@@ -65,14 +65,22 @@ After creation, the plan may be cached for replay until it is invalidated or reg
 
 ## Narrative Parsing Scope
 
-The parser should only care about genital contact involving the user.
+The parser should only care about configured intimate contact involving the user.
+
+By default this means the user's genital contact zone, but the user should be able to override that default zone for a given roleplay context.
+
+Examples of alternate default user contact zones may include:
+
+- anus
+- mouth
+- other user-defined intimate zones
 
 It does not matter whether the user is:
 
 - acting on another character
 - being acted on by another character
 
-If the action results in contact with the user's genitals, it is relevant.
+If the action results in contact with the user's currently configured primary contact zone, it is relevant.
 
 Examples:
 
@@ -1222,6 +1230,7 @@ If genital contact is not clear, the parser should do nothing.
 Likely user settings include:
 
 - playback style
+- default user contact zone for the current roleplay
 - respect narrative duration
 - allow one-shot override
 - per-character tactile profile tuning
@@ -1309,7 +1318,10 @@ So for v1:
 This feature can be added later as a multi-toy routing layer where:
 
 - different characters in the same scene may be mapped to different toys
+- users may define additional erogenous zones beyond the default genital assumptions, such as anus, mouth, or other custom zones
+- those user-defined zones may be parsed from scene context and mapped to specific toy outputs
 - one beat may resolve into multiple toy-targeted output streams
+- participant inclusion may be evaluated separately for each relevant user zone
 - participant inclusion, weighting, and contact filtering may be resolved separately per toy path
 - Lumiverse may choose whether a scene should produce one combined tactile result or several parallel toy-specific results
 

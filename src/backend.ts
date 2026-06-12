@@ -9,6 +9,7 @@ import type {
   MessagePlan,
   PlaybackMode,
   ParticipantProfileBundle,
+  UserContactZone,
   ParticipantStateAssignment,
   ParticipantState,
   ResolvedBeat,
@@ -371,19 +372,55 @@ function inferUserLikelySide(content: string): 'actor' | 'actee' {
   return 'actee'
 }
 
-function includesUserGenitalPath(content: string): boolean {
+function buildCustomZonePattern(customZone: string): RegExp {
+  const terms = customZone
+    .split(',')
+    .map((term) => term.trim().toLowerCase())
+    .filter(Boolean)
+    .map((term) => term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+
+  if (terms.length === 0) {
+    return /\b(genitals)\b/
+  }
+
+  return new RegExp(`\\b(${terms.join('|')})\\b`)
+}
+
+function getUserZoneTerms(zone: UserContactZone, customZone: string): RegExp {
+  switch (zone) {
+    case 'anus':
+      return /\b(anus|asshole|hole|rear|backdoor)\b/
+    case 'mouth':
+      return /\b(mouth|lips|tongue|throat)\b/
+    case 'custom':
+      return buildCustomZonePattern(customZone)
+    case 'genitals':
+    default:
+      return /\b(cock|dick|clit|clitoris|pussy|cunt|vagina|penis|shaft|tip|entrance)\b/
+  }
+}
+
+function includesUserPrimaryContactZone(
+  content: string,
+  zone: UserContactZone,
+  customZone: string,
+): boolean {
   const normalized = content.toLowerCase()
 
   const userTerms = /\b(you|your|yours|yourself)\b/
-  const genitalTerms = /\b(cock|dick|clit|clitoris|pussy|cunt|vagina|penis|shaft|tip|entrance|hole)\b/
+  const zoneTerms = getUserZoneTerms(zone, customZone)
   const contactTerms =
     /\b(stroke|thrust|grind|lick|suck|ride|press|fuck|tease|rub|kiss|slide|suction|squeeze|pulse)\b/
 
-  if (userTerms.test(normalized) && genitalTerms.test(normalized) && contactTerms.test(normalized)) {
+  if (userTerms.test(normalized) && zoneTerms.test(normalized) && contactTerms.test(normalized)) {
     return true
   }
 
-  if (/\b(thrust into you|stroke you|lick you|suck you|ride you|grind on you|fuck you)\b/i.test(normalized)) {
+  if (
+    /\b(thrust into you|stroke you|lick you|suck you|ride you|grind on you|fuck you|press to your|slide into your)\b/i.test(
+      normalized,
+    )
+  ) {
     return true
   }
 
@@ -441,8 +478,10 @@ function buildParticipantStateAssignments(
   messageId: string,
   content: string,
   participantProfiles: ParticipantProfileBundle,
+  primaryUserContactZone: UserContactZone,
+  customUserContactZone: string,
 ): ParticipantStateAssignment[] {
-  if (!includesUserGenitalPath(content)) {
+  if (!includesUserPrimaryContactZone(content, primaryUserContactZone, customUserContactZone)) {
     return []
   }
 
@@ -573,19 +612,27 @@ function detectExplicitStop(content: string): boolean {
   return /\b(stops|withdraws|pulls away|breaks contact|lets go|pulls out|backs off)\b/i.test(content)
 }
 
-function detectRelevantGenitalContact(content: string): boolean {
+function detectRelevantUserZoneContact(
+  content: string,
+  zone: UserContactZone,
+  customZone: string,
+): boolean {
   const normalized = content.toLowerCase()
 
-  const genitalTerms = /(cock|dick|clit|clitoris|pussy|cunt|vagina|penis|genitals|shaft|tip|hole|sex|thighs spread|entrance)/
+  const zoneTerms = getUserZoneTerms(zone, customZone)
   const contactTerms =
     /(stroke|thrust|grind|suck|suction|lick|squeeze|pulse|tease|rub|ride|fuck|press|deepen|quicken|touch|kiss|slide)/
 
-  return genitalTerms.test(normalized) && contactTerms.test(normalized)
+  return zoneTerms.test(normalized) && contactTerms.test(normalized)
 }
 
-function evaluateLaterMessage(content: string): LightweightRelevanceVerdict {
+function evaluateLaterMessage(
+  content: string,
+  zone: UserContactZone,
+  customZone: string,
+): LightweightRelevanceVerdict {
   if (detectExplicitStop(content)) return 'explicit_stop'
-  if (detectRelevantGenitalContact(content)) return 'relevant'
+  if (detectRelevantUserZoneContact(content, zone, customZone)) return 'relevant'
   return 'non_relevant'
 }
 
@@ -672,6 +719,8 @@ async function buildMessagePlan(
     messageId,
     selected.content,
     participantProfiles,
+    settings.parser.primaryUserContactZone,
+    settings.parser.customUserContactZone,
   )
 
   return {
@@ -977,7 +1026,12 @@ spindle.on('GENERATION_ENDED', async (payload, userId) => {
   const current = syncSessionToChat(userId, payload.chatId, getRuntimeSession(userId).activeCharacterId)
   if (!current.parserSession.armed) return
 
-  const verdict = evaluateLaterMessage(payload.content)
+  const settings = await readUserSettings(spindle, userId)
+  const verdict = evaluateLaterMessage(
+    payload.content,
+    settings.parser.primaryUserContactZone,
+    settings.parser.customUserContactZone,
+  )
   let nextSession: SessionState = {
     ...current,
     lastUpdatedAt: new Date().toISOString(),
@@ -1029,8 +1083,7 @@ spindle.on('GENERATION_ENDED', async (payload, userId) => {
         },
       },
     }
-
-    const threshold = (await readUserSettings(spindle, userId)).parser.deactivationThreshold
+    const threshold = settings.parser.deactivationThreshold
     if (nextCount >= threshold) {
       nextSession = clearHeldAndContinuity(nextSession)
       nextSession = {

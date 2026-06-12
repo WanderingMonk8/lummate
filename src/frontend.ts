@@ -13,6 +13,7 @@ import type {
   ParticipantProfileBundle,
   ParserSessionState,
   SettingsBootstrapPayload,
+  UserContactZone,
   UserSettings,
 } from './shared/contracts'
 
@@ -488,6 +489,7 @@ export function setup(ctx: SpindleFrontendContext) {
       <div class="lummate-phase5-debug-character">Character profile: pending</div>
       <div class="lummate-phase5-debug-fingerprint">Fingerprints: -- / --</div>
       <div class="lummate-phase4-debug-title">Phase 6 Current State</div>
+      <div class="lummate-phase6-debug-zone">Primary zone: pending</div>
       <div class="lummate-phase6-debug-actor">Actor states: pending</div>
       <div class="lummate-phase6-debug-actee">Actee states: pending</div>
     `
@@ -578,6 +580,7 @@ export function setup(ctx: SpindleFrontendContext) {
     const userNode = debugIndicator.querySelector('.lummate-phase5-debug-user')
     const characterNode = debugIndicator.querySelector('.lummate-phase5-debug-character')
     const fingerprintNode = debugIndicator.querySelector('.lummate-phase5-debug-fingerprint')
+    const zoneNode = debugIndicator.querySelector('.lummate-phase6-debug-zone')
     const actorStateNode = debugIndicator.querySelector('.lummate-phase6-debug-actor')
     const acteeStateNode = debugIndicator.querySelector('.lummate-phase6-debug-actee')
 
@@ -620,6 +623,20 @@ export function setup(ctx: SpindleFrontendContext) {
     }
 
     if (SHOW_PHASE6_DEBUG) {
+      if (zoneNode) {
+        const activeZone =
+          draftSettings?.parser.primaryUserContactZone ??
+          settingsPayload?.settings.parser.primaryUserContactZone ??
+          'pending'
+        const customZone =
+          draftSettings?.parser.customUserContactZone ??
+          settingsPayload?.settings.parser.customUserContactZone ??
+          ''
+        zoneNode.textContent =
+          activeZone === 'custom'
+            ? `Primary zone: custom (${customZone || 'unset'})`
+            : `Primary zone: ${activeZone}`
+      }
       if (actorStateNode) {
         actorStateNode.textContent = formatParticipantStateAssignments(
           'Actor states',
@@ -1044,6 +1061,46 @@ export function setup(ctx: SpindleFrontendContext) {
         },
       }),
     )
+
+    const contactZoneMount = createField(parserGrid, 'Primary user contact zone')
+    registerSettingsComponent(
+      ctx.components.mountSelect(contactZoneMount, {
+        options: [
+          { value: 'genitals', label: 'Genitals' },
+          { value: 'anus', label: 'Anus' },
+          { value: 'mouth', label: 'Mouth' },
+          { value: 'custom', label: 'Custom' },
+        ],
+        value: draftSettings.parser.primaryUserContactZone,
+        onChange: (value) => {
+          if (!draftSettings) return
+          if (value !== 'genitals' && value !== 'anus' && value !== 'mouth' && value !== 'custom') return
+          draftSettings.parser.primaryUserContactZone = value as UserContactZone
+          setSettingsStatus('Unsaved changes')
+          updateDebugIndicator()
+        },
+      }),
+    )
+
+    if (draftSettings.parser.primaryUserContactZone === 'custom') {
+      const customZoneMount = createField(
+        parserGrid,
+        'Custom zone terms',
+      )
+      registerSettingsComponent(
+        ctx.components.mountTextInput(customZoneMount, {
+          value: draftSettings.parser.customUserContactZone,
+          placeholder: 'Example: anus, asshole, rear',
+          ariaLabel: 'Custom user contact zone terms',
+          onChange: (value) => {
+            if (!draftSettings) return
+            draftSettings.parser.customUserContactZone = value.trim()
+            setSettingsStatus('Unsaved changes')
+            updateDebugIndicator()
+          },
+        }),
+      )
+    }
 
     root.appendChild(parserSection)
 

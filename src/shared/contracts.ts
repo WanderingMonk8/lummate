@@ -15,6 +15,15 @@ export type DurationClass =
   | 'extended'
   | 'ongoing'
 
+export type TransitionStyle = 'ramp' | 'snap' | 'pulse' | 'fade' | 'steady' | 'unknown'
+export type CountHint = 'one_shot' | 'few' | 'repeated' | 'continuous' | 'unknown'
+export type BeatFallbackBehavior =
+  | 'resume_previous'
+  | 'idle'
+  | 'hold_last'
+  | 'clear'
+  | 'unknown'
+
 export type ActionType =
   | 'tease'
   | 'stroke'
@@ -124,35 +133,44 @@ export interface ActionCalibrationPreset {
 export interface SemanticBeat {
   messageId: string
   orderIndex: number
+  sourceExcerpt: string
   actionType: ActionType
   strength: number
   frequency: number
   durationClass: DurationClass
   durationMs: number
+  transitionStyle: TransitionStyle
+  countHint: CountHint
   persistence: string
   responseMode: ResponseMode
   actorWeight: number
   acteeWeight: number
   explicitChange: boolean
   explicitStop: boolean
+  fallbackBehavior: BeatFallbackBehavior
 }
 
 export interface ResolvedBeat {
   messageId: string
   orderIndex: number
+  sourceExcerpt: string
   actionType: ActionType
   xtoysActionName: string
   executionProfile: ExecutionProfile
   amplitude: number
   tempo: number
   durationMs: number
+  transitionStyle: TransitionStyle
+  countHint: CountHint
   persistence: string
+  fallbackBehavior: BeatFallbackBehavior
 }
 
 export interface MessagePlan {
   messageId: string
   createdAt: string
   playbackMode: PlaybackMode
+  parserSource: 'llm' | 'deterministic_zone_fallback' | 'heuristic_fallback'
   participantStates: ParticipantStateAssignment[]
   semanticBeats: SemanticBeat[]
   resolvedBeats: ResolvedBeat[]

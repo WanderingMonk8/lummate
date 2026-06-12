@@ -39,6 +39,7 @@ const CALIBRATION_EXECUTION_PROFILES = [
 const SHOW_PHASE4_DEBUG = false
 const SHOW_PHASE5_DEBUG = true
 const SHOW_PHASE6_DEBUG = true
+const SHOW_PHASE7_DEBUG = true
 
 const CONTROL_SELECTOR = '.lummate-phase1-control'
 const ACTION_ROW_SELECTORS = [
@@ -295,7 +296,7 @@ export function setup(ctx: SpindleFrontendContext) {
     }
     .lummate-phase4-debug {
       position: fixed;
-      right: 14px;
+      left: 14px;
       bottom: 14px;
       z-index: 50;
       display: flex;
@@ -476,7 +477,7 @@ export function setup(ctx: SpindleFrontendContext) {
   `)
 
   const debugIndicator = document.createElement('div')
-  if (SHOW_PHASE4_DEBUG || SHOW_PHASE5_DEBUG || SHOW_PHASE6_DEBUG) {
+  if (SHOW_PHASE4_DEBUG || SHOW_PHASE5_DEBUG || SHOW_PHASE6_DEBUG || SHOW_PHASE7_DEBUG) {
     debugIndicator.className = 'lummate-phase4-debug'
     debugIndicator.dataset.armed = 'false'
     debugIndicator.innerHTML = `
@@ -492,6 +493,12 @@ export function setup(ctx: SpindleFrontendContext) {
       <div class="lummate-phase6-debug-zone">Primary zone: pending</div>
       <div class="lummate-phase6-debug-actor">Actor states: pending</div>
       <div class="lummate-phase6-debug-actee">Actee states: pending</div>
+      <div class="lummate-phase4-debug-title">Phase 7 Parsed Actions</div>
+      <div class="lummate-phase7-debug-source">Parser source: pending</div>
+      <div class="lummate-phase7-debug-continuity">Continuity: pending</div>
+      <div class="lummate-phase7-debug-semantic">Semantic beats: pending</div>
+      <div class="lummate-phase7-debug-resolved">Resolved beats: pending</div>
+      <div class="lummate-phase7-debug-trace">Sentence trace: pending</div>
     `
     document.body.appendChild(debugIndicator)
   }
@@ -523,16 +530,63 @@ export function setup(ctx: SpindleFrontendContext) {
 
   function formatProfileStatus(profile: ParticipantProfile | null, label: string) {
     if (!profile) return `${label}: unavailable`
-    return `${label}: ${profile.displayName} (${profile.updatedAt ? 'cached' : 'uncached'})`
+    return `${label}: ${profile.displayName} (${profile.updatedAt ? 'cached' : 'uncached'}) - ${formatProfileTendencySummary(profile)}`
   }
 
   function formatCharacterProfilesStatus(profiles: ParticipantProfile[]) {
     if (profiles.length === 0) return 'Character profiles: unavailable'
     if (profiles.length === 1) {
       const [profile] = profiles
-      return `Character profiles: ${profile.displayName} (${profile.updatedAt ? 'cached' : 'uncached'})`
+      return `Character profiles: ${profile.displayName} (${profile.updatedAt ? 'cached' : 'uncached'}) - ${formatProfileTendencySummary(profile)}`
     }
-    return `Character profiles: ${profiles.length} cached`
+    return `Character profiles: ${profiles
+      .map(
+        (profile) =>
+          `${profile.displayName} (${profile.updatedAt ? 'cached' : 'uncached'}; ${formatProfileTendencySummary(profile)})`,
+      )
+      .join(' | ')}`
+  }
+
+  function describeAxisTrend(
+    value: number,
+    positive: string,
+    neutral: string,
+    negative: string,
+  ) {
+    if (value >= 35) return positive
+    if (value <= -35) return negative
+    return neutral
+  }
+
+  function formatProfileTendencySummary(profile: ParticipantProfile) {
+    const axes = profile.mechanicalAxes
+
+    const strength = describeAxisTrend(
+      axes.baselineStrengthBias,
+      'strong',
+      'balanced strength',
+      'gentle',
+    )
+    const tempo = describeAxisTrend(
+      axes.baselineTempoBias,
+      'fast',
+      'steady tempo',
+      'slow',
+    )
+    const aggression = describeAxisTrend(
+      axes.rampAggression,
+      'aggressive',
+      'measured',
+      'restrained',
+    )
+    const smoothness = describeAxisTrend(
+      axes.smoothness,
+      'smooth',
+      'mixed texture',
+      'rough',
+    )
+
+    return [strength, tempo, aggression, smoothness].join(', ')
   }
 
   function formatParticipantStateAssignments(
@@ -548,9 +602,162 @@ export function setup(ctx: SpindleFrontendContext) {
     return `${label}: ${entries
       .map(
         (entry) =>
-          `${entry.displayName} a${entry.state.arousal} e${entry.state.energy} s${entry.state.steadiness} f${entry.state.focus} (${entry.state.provenance}, w${entry.weight})`,
+          `${entry.displayName} ${formatParticipantStateSummary(entry.state)} (${entry.state.provenance}, w${entry.weight}, src:${entry.state.sourceMessageId ?? 'none'})`,
       )
       .join(' | ')}`
+  }
+
+  function describeStateLevel(
+    value: number,
+    dimension: 'arousal' | 'energy' | 'steadiness' | 'focus',
+  ) {
+    if (dimension === 'arousal') {
+      if (value >= 80) return 'highly aroused'
+      if (value >= 65) return 'aroused'
+      if (value >= 45) return 'steady'
+      if (value >= 30) return 'muted'
+      return 'low arousal'
+    }
+
+    if (dimension === 'energy') {
+      if (value >= 80) return 'energized'
+      if (value >= 65) return 'active'
+      if (value >= 45) return 'baseline energy'
+      if (value >= 30) return 'tired'
+      return 'drained'
+    }
+
+    if (dimension === 'steadiness') {
+      if (value >= 80) return 'very steady'
+      if (value >= 65) return 'steady'
+      if (value >= 45) return 'baseline steadiness'
+      if (value >= 30) return 'shaky'
+      return 'very shaky'
+    }
+
+    if (value >= 80) return 'highly focused'
+    if (value >= 65) return 'focused'
+    if (value >= 45) return 'baseline focus'
+    if (value >= 30) return 'distracted'
+    return 'unfocused'
+  }
+
+  function formatParticipantStateSummary(state: {
+    arousal: number
+    energy: number
+    steadiness: number
+    focus: number
+  }) {
+    return [
+      `arousal ${describeStateLevel(state.arousal, 'arousal')} (${state.arousal})`,
+      `energy ${describeStateLevel(state.energy, 'energy')} (${state.energy})`,
+      `steadiness ${describeStateLevel(state.steadiness, 'steadiness')} (${state.steadiness})`,
+      `focus ${describeStateLevel(state.focus, 'focus')} (${state.focus})`,
+    ].join(', ')
+  }
+
+  function formatSemanticBeats(plan: MessagePlan | null) {
+    if (!plan) return 'Semantic beats: pending'
+    if (plan.semanticBeats.length === 0) return 'Semantic beats: none'
+
+    return `Semantic beats: ${plan.semanticBeats
+      .map(
+        (beat) =>
+          `${beat.orderIndex + 1}.${beat.actionType} s${beat.strength} f${beat.frequency} d${beat.durationMs}ms ${beat.durationClass} w${beat.actorWeight}/${beat.acteeWeight} ${beat.transitionStyle}/${beat.countHint} ${beat.responseMode} ${beat.fallbackBehavior}`,
+      )
+      .join(' | ')}`
+  }
+
+  function formatResolvedBeats(plan: MessagePlan | null) {
+    if (!plan) return 'Resolved beats: pending'
+    if (plan.resolvedBeats.length === 0) return 'Resolved beats: none'
+
+    return `Resolved beats: ${plan.resolvedBeats
+      .map(
+        (beat) =>
+          `${beat.orderIndex + 1}.${beat.actionType} -> ${beat.xtoysActionName || 'unmapped'} a${beat.amplitude} t${beat.tempo} d${beat.durationMs}ms ${beat.executionProfile} ${beat.transitionStyle}/${beat.countHint} ${beat.fallbackBehavior}`,
+      )
+      .join(' | ')}`
+  }
+
+  function splitDebugSentences(content: string) {
+    return content
+      .split(/(?<=[.!?])\s+/)
+      .map((sentence) => sentence.trim())
+      .filter(Boolean)
+  }
+
+  function formatSentenceTrace(plan: MessagePlan | null) {
+    if (!plan) return 'Sentence trace: pending'
+    if (plan.semanticBeats.length === 0) return 'Sentence trace: no relevant beats'
+
+    const traceLines: string[] = []
+    const sentencePool = new Set<string>()
+
+    for (const beat of plan.semanticBeats) {
+      const source = beat.sourceExcerpt?.trim() || ''
+      if (!source) continue
+
+      const sourceSentences = splitDebugSentences(source)
+      if (sourceSentences.length === 0) {
+        sourceSentences.push(source)
+      }
+
+      for (const sentence of sourceSentences) {
+        const normalizedSentence = sentence.trim()
+        if (!normalizedSentence) continue
+        sentencePool.add(normalizedSentence)
+      }
+    }
+
+    const sourceSentences = [...sentencePool]
+
+    if (sourceSentences.length === 0) {
+      return `Sentence trace: ${plan.semanticBeats
+        .map((beat) => `${beat.orderIndex + 1}.${beat.actionType} <= ${beat.sourceExcerpt || '[no excerpt]'}`)
+        .join(' | ')}`
+    }
+
+    for (const sentence of sourceSentences) {
+      const normalizedSentence = sentence.toLowerCase()
+      const matchingBeats = plan.semanticBeats.filter((beat) => {
+        const excerpt = beat.sourceExcerpt?.toLowerCase() || ''
+        return excerpt.includes(normalizedSentence) || normalizedSentence.includes(excerpt)
+      })
+
+      traceLines.push(
+        `"${sentence}" => ${
+          matchingBeats.length > 0
+            ? matchingBeats
+                .map(
+                  (beat) =>
+                    `${beat.orderIndex + 1}.${beat.actionType} s${beat.strength} f${beat.frequency} d${beat.durationMs}ms w${beat.actorWeight}/${beat.acteeWeight} ${beat.durationClass}`,
+                )
+                .join(', ')
+            : 'no mapped beat'
+        }`,
+      )
+    }
+
+    const unmappedBeats = plan.semanticBeats.filter((beat) => {
+      const excerpt = beat.sourceExcerpt?.trim()
+      if (!excerpt) return true
+      return !sourceSentences.some((sentence) => {
+        const normalizedSentence = sentence.toLowerCase()
+        const normalizedExcerpt = excerpt.toLowerCase()
+        return normalizedExcerpt.includes(normalizedSentence) || normalizedSentence.includes(normalizedExcerpt)
+      })
+    })
+
+    if (unmappedBeats.length > 0) {
+      traceLines.push(
+        `Unmapped beats: ${unmappedBeats
+          .map((beat) => `${beat.orderIndex + 1}.${beat.actionType} <= ${beat.sourceExcerpt || '[no excerpt]'}`)
+          .join(' | ')}`,
+      )
+    }
+
+    return `Sentence trace: ${traceLines.join(' || ')}`
   }
 
   function updateMessageVisual(messageId: string) {
@@ -572,7 +779,7 @@ export function setup(ctx: SpindleFrontendContext) {
   }
 
   function updateDebugIndicator() {
-    if (!SHOW_PHASE4_DEBUG && !SHOW_PHASE5_DEBUG && !SHOW_PHASE6_DEBUG) return
+    if (!SHOW_PHASE4_DEBUG && !SHOW_PHASE5_DEBUG && !SHOW_PHASE6_DEBUG && !SHOW_PHASE7_DEBUG) return
 
     const stateNode = debugIndicator.querySelector('.lummate-phase4-debug-state')
     const countNode = debugIndicator.querySelector('.lummate-phase4-debug-count')
@@ -583,6 +790,11 @@ export function setup(ctx: SpindleFrontendContext) {
     const zoneNode = debugIndicator.querySelector('.lummate-phase6-debug-zone')
     const actorStateNode = debugIndicator.querySelector('.lummate-phase6-debug-actor')
     const acteeStateNode = debugIndicator.querySelector('.lummate-phase6-debug-actee')
+    const continuityNode = debugIndicator.querySelector('.lummate-phase7-debug-continuity')
+    const semanticNode = debugIndicator.querySelector('.lummate-phase7-debug-semantic')
+    const resolvedNode = debugIndicator.querySelector('.lummate-phase7-debug-resolved')
+    const traceNode = debugIndicator.querySelector('.lummate-phase7-debug-trace')
+    const sourceNode = debugIndicator.querySelector('.lummate-phase7-debug-source')
 
     if (SHOW_PHASE4_DEBUG) {
       if (!parserSessionState) {
@@ -650,6 +862,24 @@ export function setup(ctx: SpindleFrontendContext) {
           currentPlan,
           'actee',
         )
+      }
+    }
+
+    if (SHOW_PHASE7_DEBUG) {
+      if (sourceNode) {
+        sourceNode.textContent = `Parser source: ${currentPlan?.parserSource ?? 'pending'}`
+      }
+      if (continuityNode) {
+        continuityNode.textContent = `Continuity: ${currentPlan?.continuityVerdict ?? 'none'} / transition: ${currentPlan?.transitionMode ?? 'none'}`
+      }
+      if (semanticNode) {
+        semanticNode.textContent = formatSemanticBeats(currentPlan)
+      }
+      if (resolvedNode) {
+        resolvedNode.textContent = formatResolvedBeats(currentPlan)
+      }
+      if (traceNode) {
+        traceNode.textContent = formatSentenceTrace(currentPlan)
       }
     }
   }

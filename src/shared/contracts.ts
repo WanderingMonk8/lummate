@@ -6,6 +6,11 @@ export type UserContactZone = 'genitals' | 'anus' | 'mouth' | 'custom'
 export type ResponseMode = 'lead' | 'meet' | 'withdraw' | 'mutual'
 export type ContinuityVerdict = 'continue' | 'progress' | 'modify' | 'replace' | 'stop'
 export type TransitionMode = 'replace' | 'modulate' | 'blend'
+export type EndOfPlaybackResolution =
+  | 'idle'
+  | 'hold_new_final'
+  | 'resume_previous_held'
+  | 'loop_current_plan'
 export type DurationClass =
   | 'instant'
   | 'very_short'
@@ -186,6 +191,7 @@ export interface MessagePlan {
   resolvedBeats: ResolvedBeat[]
   continuityVerdict: ContinuityVerdict | null
   transitionMode: TransitionMode | null
+  endResolution: EndOfPlaybackResolution | null
 }
 
 export interface RuntimePlanBuffer {
@@ -197,6 +203,7 @@ export interface HeldState {
   actionFamily: ActionType | null
   resolvedActionPreset: ActionCalibrationPreset | null
   resolvedExecutionProfile: ExecutionProfile
+  contactZone: UserContactZone | null
   strength: number
   frequency: number
   persistence: string | null
@@ -382,6 +389,7 @@ export const DEFAULT_HELD_STATE: HeldState = {
   actionFamily: null,
   resolvedActionPreset: null,
   resolvedExecutionProfile: 'unknown',
+  contactZone: null,
   strength: 0,
   frequency: 0,
   persistence: null,

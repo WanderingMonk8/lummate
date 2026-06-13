@@ -32,8 +32,9 @@ The Lumiverse-side extension has been verified in Lumiverse far enough to confir
 - contact filtering now respects tracked participant ownership, tracked contact zones, and multi-participant scene context
 - calibrated tactile resolution is now active, including preset fallback, XToys action-name mapping, participant contribution modulation, and safety-clamped resolved beats
 - tactile calibration changes now affect resolved beat output during verification
+- runtime-only held-state continuity is now active, including entry-beat transition selection and end-of-playback resolution for replace/modulate/basic blend flows
 
-The project is still pre-XToys runtime integration, and the parser still mixes LLM output with deterministic fallback logic while the scene-matching rules are being tuned. But the Lumiverse-side shell, state model, tracked-participant flow, profile cache, and verification surfaces are now active and testable inside Lumiverse.
+The project is still pre-XToys runtime integration, and the parser still mixes LLM output with deterministic fallback logic while the scene-matching rules are being tuned. Blend behavior is still a Lumiverse-side heuristic for now rather than a true XToys-side concurrent execution model. But the Lumiverse-side shell, state model, tracked-participant flow, profile cache, held-state controller, and verification surfaces are now active and testable inside Lumiverse.
 
 The main working documents are:
 
@@ -53,7 +54,7 @@ The planned extension will:
 ## Near-Term Goals
 
 - keep tightening tracked-participant and tracked-zone parsing across mixed multi-party scenes
-- improve action continuity, pause detection, and per-beat transition handling
+- refine held-state transition heuristics, especially where concurrent actions may look like blend vs replace
 - integrate XToys webhook command dispatch
 - reduce dependence on deterministic parser fallback as structured parser coverage improves
 - deepen the calibrated contribution model and expose clearer resolution diagnostics where needed

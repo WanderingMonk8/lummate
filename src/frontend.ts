@@ -8,6 +8,7 @@ import type {
   BackendToFrontendMessage,
   BootstrapPayload,
   ChatTrackingPreferences,
+  HeldState,
   MessagePlan,
   PlaybackMode,
   ParticipantKind,
@@ -167,6 +168,7 @@ export function setup(ctx: SpindleFrontendContext) {
   let activeMessageId: string | null = null
   let activeChatId: string | null = ctx.getActiveChat().chatId
   let currentPlan: MessagePlan | null = null
+  let currentHeldState: HeldState | null = null
   let openBreakoutMessageId: string | null = null
   let parserSessionState: ParserSessionState | null = null
   let settingsPayload: SettingsBootstrapPayload | null = null
@@ -507,6 +509,7 @@ export function setup(ctx: SpindleFrontendContext) {
       <div class="lummate-phase4-debug-title">Phase 7 Parsed Actions</div>
       <div class="lummate-phase7-debug-source">Parser source: pending</div>
       <div class="lummate-phase7-debug-continuity">Continuity: pending</div>
+      <div class="lummate-phase7-debug-held">Held: pending</div>
       <div class="lummate-phase7-debug-semantic">Semantic beats: pending</div>
       <div class="lummate-phase7-debug-resolved">Resolved beats: pending</div>
       <div class="lummate-phase7-debug-trace">Sentence trace: pending</div>
@@ -852,6 +855,7 @@ export function setup(ctx: SpindleFrontendContext) {
     const actorStateNode = debugIndicator.querySelector('.lummate-phase6-debug-actor')
     const acteeStateNode = debugIndicator.querySelector('.lummate-phase6-debug-actee')
     const continuityNode = debugIndicator.querySelector('.lummate-phase7-debug-continuity')
+    const heldNode = debugIndicator.querySelector('.lummate-phase7-debug-held')
     const semanticNode = debugIndicator.querySelector('.lummate-phase7-debug-semantic')
     const resolvedNode = debugIndicator.querySelector('.lummate-phase7-debug-resolved')
     const traceNode = debugIndicator.querySelector('.lummate-phase7-debug-trace')
@@ -935,7 +939,10 @@ export function setup(ctx: SpindleFrontendContext) {
         sourceNode.textContent = `Parser source: ${currentPlan?.parserSource ?? 'pending'}`
       }
       if (continuityNode) {
-        continuityNode.textContent = `Continuity: ${currentPlan?.continuityVerdict ?? 'none'} / transition: ${currentPlan?.transitionMode ?? 'none'}`
+        continuityNode.textContent = `Continuity: ${currentPlan?.continuityVerdict ?? 'none'} / transition: ${currentPlan?.transitionMode ?? 'none'} / end: ${currentPlan?.endResolution ?? 'none'}`
+      }
+      if (heldNode) {
+        heldNode.textContent = `Held: ${currentHeldState?.actionFamily ?? 'none'} @ ${currentHeldState?.contactZone ?? 'none'}`
       }
       if (semanticNode) {
         semanticNode.textContent = formatSemanticBeats(currentPlan)
@@ -1020,6 +1027,7 @@ export function setup(ctx: SpindleFrontendContext) {
     activeChatId = nextChatId
     activeMessageId = null
     currentPlan = null
+    currentHeldState = null
     parserSessionState = null
     currentChatPreferences = null
     syncVisuals()
@@ -2078,6 +2086,7 @@ export function setup(ctx: SpindleFrontendContext) {
     activeChatId = payload.session.activeChatId
     activeMessageId = payload.session.activeMessageId
     currentPlan = payload.session.runtimePlans.currentPlan
+    currentHeldState = payload.session.heldState
     parserSessionState = payload.session.parserSession
     currentChatPreferences = payload.chatPreferences
     participantProfiles = payload.participantProfiles

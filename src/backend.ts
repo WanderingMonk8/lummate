@@ -6,7 +6,9 @@ import type {
   BackendToFrontendMessage,
   ChatTrackingPreferences,
   ConnectionProfileSummary,
+  EndOfPlaybackResolution,
   FrontendToBackendMessage,
+  HeldState,
   MechanicalAxes,
   MessagePlan,
   PlaybackMode,
@@ -2621,6 +2623,220 @@ function resolveTransitionMode(
   return null
 }
 
+function hasPersistentBeat(beat: Pick<SemanticBeat, 'persistence' | 'fallbackBehavior'> | null): boolean {
+  if (!beat) return false
+  return (
+    /\b(ongoing|sustain|held?|continuous)\b/i.test(beat.persistence) ||
+    beat.fallbackBehavior === 'hold_last'
+  )
+}
+
+function resolveContinuityVerdictAgainstHeldState(
+  heldState: HeldState,
+  previousPlan: MessagePlan | null,
+  entryBeat: Pick<SemanticBeat, 'actionType' | 'explicitStop'> | null,
+): MessagePlan['continuityVerdict'] {
+  if (entryBeat?.explicitStop) return 'stop'
+  if (!entryBeat) return null
+
+  if (heldState.actionFamily) {
+    return heldState.actionFamily === entryBeat.actionType ? 'modify' : 'replace'
+  }
+
+  return resolveContinuityVerdict(previousPlan, entryBeat)
+}
+
+function resolveTransitionModeAgainstHeldState(
+  heldState: HeldState,
+  semanticBeats: SemanticBeat[],
+  continuityVerdict: MessagePlan['continuityVerdict'],
+): MessagePlan['transitionMode'] {
+  if (!heldState.actionFamily || semanticBeats.length === 0) {
+    return resolveTransitionMode(continuityVerdict)
+  }
+
+  if (continuityVerdict === 'stop') {
+    return 'replace'
+  }
+
+  const entryAction = semanticBeats[0]?.actionType ?? null
+  const actionFamilies = [...new Set(semanticBeats.map((beat) => beat.actionType))]
+  const terminalAction = semanticBeats[semanticBeats.length - 1]?.actionType ?? null
+
+  if (entryAction == null) {
+    return resolveTransitionMode(continuityVerdict)
+  }
+
+  if (heldState.actionFamily === entryAction) {
+    return 'modulate'
+  }
+
+  if (
+    actionFamilies.length > 1 &&
+    actionFamilies.includes(heldState.actionFamily) &&
+    entryAction !== heldState.actionFamily &&
+    terminalAction != null &&
+    terminalAction === heldState.actionFamily
+  ) {
+    return 'blend'
+  }
+
+  return 'replace'
+}
+
+function resolveEndOfPlaybackResolution(
+  plan: MessagePlan,
+  previousHeldState: HeldState,
+): EndOfPlaybackResolution {
+  const terminalBeat = [...plan.semanticBeats].sort((left, right) => left.orderIndex - right.orderIndex).at(-1) ?? null
+
+  if (plan.playbackMode === 'loop') {
+    return 'loop_current_plan'
+  }
+
+  if (plan.continuityVerdict === 'stop' || terminalBeat?.explicitStop) {
+    return 'idle'
+  }
+
+  if (
+    terminalBeat &&
+    previousHeldState.actionFamily &&
+    terminalBeat.fallbackBehavior === 'resume_previous' &&
+    !hasPersistentBeat(terminalBeat)
+  ) {
+    return 'resume_previous_held'
+  }
+
+  if (plan.playbackMode === 'hold' || hasPersistentBeat(terminalBeat)) {
+    return 'hold_new_final'
+  }
+
+  return 'idle'
+}
+
+function buildHeldStateFromPlan(
+  plan: MessagePlan,
+  chatId: string | null,
+  contactZone: UserContactZone,
+  atIso: string,
+  previousHeldState: HeldState,
+): HeldState {
+  const terminalSemanticBeat = [...plan.semanticBeats]
+    .sort((left, right) => left.orderIndex - right.orderIndex)
+    .at(-1) ?? null
+  const terminalResolvedBeat = [...plan.resolvedBeats]
+    .sort((left, right) => left.orderIndex - right.orderIndex)
+    .at(-1) ?? null
+
+  if (!terminalSemanticBeat || !terminalResolvedBeat) {
+    return { ...DEFAULT_SESSION_STATE.heldState }
+  }
+
+  const resolvedPreset = plan.resolvedBeats.length > 0
+    ? ({
+        semanticActionType: terminalSemanticBeat.actionType,
+        supported: true,
+        fallbackTarget: null,
+        baseAmplitude: terminalResolvedBeat.amplitude,
+        baseTempo: terminalResolvedBeat.tempo,
+        preferredExecutionProfile: terminalResolvedBeat.executionProfile,
+        preferredTransitionStyle: terminalResolvedBeat.transitionStyle,
+        repeatStyle: plan.playbackMode,
+        holdTendency: hasPersistentBeat(terminalSemanticBeat) ? 100 : 0,
+        revision: 0,
+      } satisfies ActionCalibrationPreset)
+    : null
+
+  return {
+    actionFamily: terminalSemanticBeat.actionType,
+    resolvedActionPreset: resolvedPreset,
+    resolvedExecutionProfile: terminalResolvedBeat.executionProfile,
+    contactZone,
+    strength: terminalResolvedBeat.amplitude,
+    frequency: terminalResolvedBeat.tempo,
+    persistence: terminalSemanticBeat.persistence,
+    actorContribution: terminalSemanticBeat.actorWeight,
+    acteeContribution: terminalSemanticBeat.acteeWeight,
+    sourceMessageId: plan.messageId,
+    chatId,
+    startedAt:
+      previousHeldState.actionFamily === terminalSemanticBeat.actionType && previousHeldState.startedAt
+        ? previousHeldState.startedAt
+        : atIso,
+    lastUpdatedAt: atIso,
+  }
+}
+
+function applyPhase9Controller(
+  plan: MessagePlan,
+  previousHeldState: HeldState,
+  previousPlan: MessagePlan | null,
+  chatId: string | null,
+  contactZone: UserContactZone,
+  atIso: string,
+): {
+  plan: MessagePlan
+  heldState: HeldState
+  currentHeldStateRef: string | null
+  continuityMemoryPatch: Record<string, unknown>
+} {
+  const orderedSemanticBeats = [...plan.semanticBeats].sort(
+    (left, right) => left.orderIndex - right.orderIndex,
+  )
+  const entrySemanticBeat = orderedSemanticBeats[0] ?? null
+  const terminalSemanticBeat = orderedSemanticBeats.at(-1) ?? null
+
+  const continuityVerdict = resolveContinuityVerdictAgainstHeldState(
+    previousHeldState,
+    previousPlan,
+    entrySemanticBeat,
+  )
+  const transitionMode = resolveTransitionModeAgainstHeldState(
+    previousHeldState,
+    orderedSemanticBeats,
+    continuityVerdict,
+  )
+  const controlledPlan: MessagePlan = {
+    ...plan,
+    continuityVerdict,
+    transitionMode,
+    endResolution: null,
+  }
+  const endResolution = resolveEndOfPlaybackResolution(controlledPlan, previousHeldState)
+  controlledPlan.endResolution = endResolution
+
+  let nextHeldState: HeldState
+  if (endResolution === 'hold_new_final' || endResolution === 'loop_current_plan') {
+    nextHeldState = buildHeldStateFromPlan(
+      controlledPlan,
+      chatId,
+      contactZone,
+      atIso,
+      previousHeldState,
+    )
+  } else if (endResolution === 'resume_previous_held' && previousHeldState.actionFamily) {
+    nextHeldState = {
+      ...previousHeldState,
+      lastUpdatedAt: atIso,
+    }
+  } else {
+    nextHeldState = {
+      ...DEFAULT_SESSION_STATE.heldState,
+    }
+  }
+
+  return {
+    plan: controlledPlan,
+    heldState: nextHeldState,
+    currentHeldStateRef: nextHeldState.sourceMessageId,
+    continuityMemoryPatch: {
+      lastTransitionMode: transitionMode,
+      lastEndResolution: endResolution,
+      lastHeldActionFamily: nextHeldState.actionFamily,
+    },
+  }
+}
+
 type LightweightRelevanceVerdict = 'relevant' | 'non_relevant' | 'explicit_stop'
 
 function detectExplicitStop(content: string): boolean {
@@ -2784,6 +3000,7 @@ async function buildMessagePlan(
       resolvedBeats: [],
       continuityVerdict: parsedScene.continuity_verdict,
       transitionMode: resolveTransitionMode(parsedScene.continuity_verdict),
+      endResolution: 'idle',
     }
   }
 
@@ -2798,6 +3015,7 @@ async function buildMessagePlan(
       resolvedBeats: [],
       continuityVerdict: null,
       transitionMode: null,
+      endResolution: 'idle',
     }
   }
 
@@ -2999,6 +3217,7 @@ async function buildMessagePlan(
       resolvedBeats,
       continuityVerdict,
       transitionMode,
+      endResolution: null,
     }
 }
 
@@ -3051,6 +3270,9 @@ async function handleFrontendMessage(
 
         const settings = await readUserSettings(spindle, userId)
         const nextRuntimePlans = { ...current.runtimePlans }
+        let nextHeldState = { ...current.heldState }
+        let currentHeldStateRef = current.parserSession.currentHeldStateRef
+        let continuityMemoryPatch: Record<string, unknown> = {}
 
         if (payload.payload.chatId && nextActiveMessageId) {
           const nextPlan = await buildMessagePlan(
@@ -3062,9 +3284,26 @@ async function handleFrontendMessage(
             current,
             payload.payload.playbackModeOverride ?? null,
           )
+          const chatPreferences = await readChatTrackingPreferences(
+            spindle,
+            userId,
+            payload.payload.chatId,
+            settings,
+          )
+          const controllerResult = applyPhase9Controller(
+            nextPlan,
+            current.heldState,
+            current.runtimePlans.currentPlan,
+            payload.payload.chatId,
+            chatPreferences.primaryContactZone,
+            new Date().toISOString(),
+          )
 
           nextRuntimePlans.previousPlan = current.runtimePlans.currentPlan
-          nextRuntimePlans.currentPlan = nextPlan
+          nextRuntimePlans.currentPlan = controllerResult.plan
+          nextHeldState = controllerResult.heldState
+          currentHeldStateRef = controllerResult.currentHeldStateRef
+          continuityMemoryPatch = controllerResult.continuityMemoryPatch
         }
 
         const nextSession: SessionState = {
@@ -3089,9 +3328,12 @@ async function handleFrontendMessage(
                     ...current.parserSession.continuityMemory,
                     lastPlayedMessageId: payload.payload.messageId,
                     lastPlayArmedAt: new Date().toISOString(),
+                    ...continuityMemoryPatch,
                   }
                 : current.parserSession.continuityMemory,
+            currentHeldStateRef,
           },
+          heldState: nextActiveMessageId !== null ? nextHeldState : current.heldState,
           runtimePlans: nextRuntimePlans,
         }
 
@@ -3132,15 +3374,38 @@ async function handleFrontendMessage(
           current,
           payload.payload.playbackModeOverride ?? null,
         )
+        const chatPreferences = await readChatTrackingPreferences(
+          spindle,
+          userId,
+          payload.payload.chatId,
+          settings,
+        )
+        const controllerResult = applyPhase9Controller(
+          regeneratedPlan,
+          current.heldState,
+          current.runtimePlans.previousPlan,
+          payload.payload.chatId,
+          chatPreferences.primaryContactZone,
+          new Date().toISOString(),
+        )
 
         const nextSession: SessionState = {
           ...current,
           activeChatId: payload.payload.chatId,
           activeCharacterId: payload.payload.characterId,
           lastUpdatedAt: new Date().toISOString(),
+          heldState: controllerResult.heldState,
+          parserSession: {
+            ...current.parserSession,
+            currentHeldStateRef: controllerResult.currentHeldStateRef,
+            continuityMemory: {
+              ...current.parserSession.continuityMemory,
+              ...controllerResult.continuityMemoryPatch,
+            },
+          },
           runtimePlans: {
             ...current.runtimePlans,
-            currentPlan: regeneratedPlan,
+            currentPlan: controllerResult.plan,
           },
         }
 
@@ -3169,18 +3434,53 @@ async function handleFrontendMessage(
         )
         const currentPlan = current.runtimePlans.currentPlan
 
+        let nextHeldState = current.heldState
+        let currentHeldStateRef = current.parserSession.currentHeldStateRef
+        let continuityMemoryPatch: Record<string, unknown> = {}
+        let nextPlan = currentPlan
+
+        if (currentPlan && payload.payload.chatId) {
+          const chatPreferences = await readChatTrackingPreferences(
+            spindle,
+            userId,
+            payload.payload.chatId,
+            await readUserSettings(spindle, userId),
+          )
+          const controllerResult = applyPhase9Controller(
+            {
+              ...currentPlan,
+              playbackMode: payload.payload.playbackMode,
+            },
+            current.heldState,
+            current.runtimePlans.previousPlan,
+            payload.payload.chatId,
+            chatPreferences.primaryContactZone,
+            new Date().toISOString(),
+          )
+          nextPlan = controllerResult.plan
+          nextHeldState = controllerResult.heldState
+          currentHeldStateRef = controllerResult.currentHeldStateRef
+          continuityMemoryPatch = controllerResult.continuityMemoryPatch
+        }
+
         const nextSession: SessionState = {
           ...current,
           activeCharacterId: payload.payload.characterId,
           lastUpdatedAt: new Date().toISOString(),
+          heldState: nextHeldState,
+          parserSession: {
+            ...current.parserSession,
+            currentHeldStateRef,
+            continuityMemory: {
+              ...current.parserSession.continuityMemory,
+              ...continuityMemoryPatch,
+            },
+          },
           runtimePlans: {
             ...current.runtimePlans,
             currentPlan:
               currentPlan && currentPlan.messageId === payload.payload.messageId
-                ? {
-                    ...currentPlan,
-                    playbackMode: payload.payload.playbackMode,
-                  }
+                ? nextPlan
                 : currentPlan,
           },
         }

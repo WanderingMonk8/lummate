@@ -11,6 +11,7 @@ export type EndOfPlaybackResolution =
   | 'hold_new_final'
   | 'resume_previous_held'
   | 'loop_current_plan'
+export type SchedulerStatus = 'idle' | 'playing' | 'holding' | 'looping' | 'stopped'
 export type DurationClass =
   | 'instant'
   | 'very_short'
@@ -223,6 +224,15 @@ export interface ParserSessionState {
   continuityMemory: Record<string, unknown>
 }
 
+export interface SchedulerState {
+  status: SchedulerStatus
+  activePlanMessageId: string | null
+  activeBeatIndex: number | null
+  activeBeatStartedAt: string | null
+  playbackCycle: number
+  lastCompletionReason: 'completed' | 'stopped' | 'replaced' | 'panic_stop' | null
+}
+
 export interface UserSettings {
   parser: ParserConnectionSettings
   xtoysActionMappings: XToysActionMappingSettings[]
@@ -236,6 +246,7 @@ export interface SessionState {
   lastPlayedMessageId: string | null
   lastUpdatedAt: string | null
   parserSession: ParserSessionState
+  scheduler: SchedulerState
   heldState: HeldState
   runtimePlans: RuntimePlanBuffer
 }
@@ -385,6 +396,15 @@ export const DEFAULT_RUNTIME_PLAN_BUFFER: RuntimePlanBuffer = {
   previousPlan: null,
 }
 
+export const DEFAULT_SCHEDULER_STATE: SchedulerState = {
+  status: 'idle',
+  activePlanMessageId: null,
+  activeBeatIndex: null,
+  activeBeatStartedAt: null,
+  playbackCycle: 0,
+  lastCompletionReason: null,
+}
+
 export const DEFAULT_HELD_STATE: HeldState = {
   actionFamily: null,
   resolvedActionPreset: null,
@@ -408,6 +428,7 @@ export const DEFAULT_SESSION_STATE: SessionState = {
   lastPlayedMessageId: null,
   lastUpdatedAt: null,
   parserSession: DEFAULT_PARSER_SESSION_STATE,
+  scheduler: DEFAULT_SCHEDULER_STATE,
   heldState: DEFAULT_HELD_STATE,
   runtimePlans: DEFAULT_RUNTIME_PLAN_BUFFER,
 }

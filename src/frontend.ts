@@ -15,6 +15,7 @@ import type {
   ParticipantProfile,
   ParticipantProfileBundle,
   ParserSessionState,
+  SchedulerState,
   SettingsBootstrapPayload,
   UserContactZone,
   UserSettings,
@@ -169,6 +170,7 @@ export function setup(ctx: SpindleFrontendContext) {
   let activeChatId: string | null = ctx.getActiveChat().chatId
   let currentPlan: MessagePlan | null = null
   let currentHeldState: HeldState | null = null
+  let currentSchedulerState: SchedulerState | null = null
   let openBreakoutMessageId: string | null = null
   let parserSessionState: ParserSessionState | null = null
   let settingsPayload: SettingsBootstrapPayload | null = null
@@ -510,6 +512,7 @@ export function setup(ctx: SpindleFrontendContext) {
       <div class="lummate-phase7-debug-source">Parser source: pending</div>
       <div class="lummate-phase7-debug-continuity">Continuity: pending</div>
       <div class="lummate-phase7-debug-held">Held: pending</div>
+      <div class="lummate-phase7-debug-scheduler">Scheduler: pending</div>
       <div class="lummate-phase7-debug-semantic">Semantic beats: pending</div>
       <div class="lummate-phase7-debug-resolved">Resolved beats: pending</div>
       <div class="lummate-phase7-debug-trace">Sentence trace: pending</div>
@@ -856,6 +859,7 @@ export function setup(ctx: SpindleFrontendContext) {
     const acteeStateNode = debugIndicator.querySelector('.lummate-phase6-debug-actee')
     const continuityNode = debugIndicator.querySelector('.lummate-phase7-debug-continuity')
     const heldNode = debugIndicator.querySelector('.lummate-phase7-debug-held')
+    const schedulerNode = debugIndicator.querySelector('.lummate-phase7-debug-scheduler')
     const semanticNode = debugIndicator.querySelector('.lummate-phase7-debug-semantic')
     const resolvedNode = debugIndicator.querySelector('.lummate-phase7-debug-resolved')
     const traceNode = debugIndicator.querySelector('.lummate-phase7-debug-trace')
@@ -944,6 +948,9 @@ export function setup(ctx: SpindleFrontendContext) {
       if (heldNode) {
         heldNode.textContent = `Held: ${currentHeldState?.actionFamily ?? 'none'} @ ${currentHeldState?.contactZone ?? 'none'}`
       }
+      if (schedulerNode) {
+        schedulerNode.textContent = `Scheduler: ${currentSchedulerState?.status ?? 'none'} / plan: ${currentSchedulerState?.activePlanMessageId ?? 'none'} / beat: ${currentSchedulerState?.activeBeatIndex ?? 'none'} / cycle: ${currentSchedulerState?.playbackCycle ?? 0} / reason: ${currentSchedulerState?.lastCompletionReason ?? 'none'}`
+      }
       if (semanticNode) {
         semanticNode.textContent = formatSemanticBeats(currentPlan)
       }
@@ -1028,6 +1035,7 @@ export function setup(ctx: SpindleFrontendContext) {
     activeMessageId = null
     currentPlan = null
     currentHeldState = null
+    currentSchedulerState = null
     parserSessionState = null
     currentChatPreferences = null
     syncVisuals()
@@ -2087,6 +2095,7 @@ export function setup(ctx: SpindleFrontendContext) {
     activeMessageId = payload.session.activeMessageId
     currentPlan = payload.session.runtimePlans.currentPlan
     currentHeldState = payload.session.heldState
+    currentSchedulerState = payload.session.scheduler
     parserSessionState = payload.session.parserSession
     currentChatPreferences = payload.chatPreferences
     participantProfiles = payload.participantProfiles

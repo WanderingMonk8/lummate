@@ -21,6 +21,7 @@ import type {
   ResolvedBeat,
   SemanticBeat,
   SessionState,
+  SchedulerState,
   XToysActionMappingSettings,
   UserSettings,
 } from './shared/contracts'
@@ -35,6 +36,7 @@ import {
 import {
   DEFAULT_MECHANICAL_AXES,
   DEFAULT_RUNTIME_PLAN_BUFFER,
+  DEFAULT_SCHEDULER_STATE,
   DEFAULT_SESSION_STATE,
 } from './shared/contracts'
 
@@ -193,6 +195,21 @@ function isFrontendMessage(payload: unknown): payload is FrontendToBackendMessag
 
 const runtimeSessions = new Map<string, SessionState>()
 const activeChatIds = new Map<string, string | null>()
+type PlaybackCompletionReason = SchedulerState['lastCompletionReason']
+
+interface ActivePlaybackRuntime {
+  sequenceId: number
+  timer: ReturnType<typeof setTimeout> | null
+  plan: MessagePlan
+  futureHeldState: HeldState
+  previousHeldState: HeldState
+  chatId: string | null
+  characterId: string | null
+  contactZone: UserContactZone
+}
+
+const playbackRuntimes = new Map<string, ActivePlaybackRuntime>()
+let playbackSequenceCounter = 0
 
 function cloneDefaultSessionState(): SessionState {
   return {
@@ -203,6 +220,9 @@ function cloneDefaultSessionState(): SessionState {
       ...DEFAULT_SESSION_STATE.parserSession,
       continuityMemory: {},
     },
+    scheduler: {
+      ...DEFAULT_SCHEDULER_STATE,
+    },
     heldState: {
       ...DEFAULT_SESSION_STATE.heldState,
     },
@@ -210,6 +230,19 @@ function cloneDefaultSessionState(): SessionState {
       ...DEFAULT_RUNTIME_PLAN_BUFFER,
     },
   }
+}
+
+function clearPlaybackTimer(runtime: ActivePlaybackRuntime | undefined) {
+  if (runtime?.timer) {
+    clearTimeout(runtime.timer)
+    runtime.timer = null
+  }
+}
+
+function cancelPlaybackRuntime(userId: string) {
+  const runtime = playbackRuntimes.get(userId)
+  clearPlaybackTimer(runtime)
+  playbackRuntimes.delete(userId)
 }
 
 function getRuntimeSession(userId: string): SessionState {
@@ -226,6 +259,7 @@ function resetRuntimeSession(
   chatId: string | null,
   characterId: string | null,
 ): SessionState {
+  cancelPlaybackRuntime(userId)
   const next = cloneDefaultSessionState()
   next.activeChatId = chatId
   next.activeCharacterId = characterId
@@ -260,6 +294,242 @@ async function buildBootstrap(userId: string, chatId: string | null, characterId
   const session = syncSessionToChat(userId, chatId, characterId)
 
   return { settings, session, chatPreferences, participantProfiles }
+}
+
+async function broadcastSessionState(
+  userId: string,
+  chatId: string | null,
+  characterId: string | null,
+) {
+  const bootstrap = await buildBootstrap(userId, chatId, characterId)
+  sendToUser(
+    {
+      type: 'lummate.phase1.session_state',
+      payload: bootstrap,
+    },
+    userId,
+  )
+}
+
+function getOrderedResolvedBeats(plan: MessagePlan) {
+  return [...plan.resolvedBeats].sort((left, right) => left.orderIndex - right.orderIndex)
+}
+
+function resolveHeldStateAfterPlayback(
+  endResolution: EndOfPlaybackResolution | null,
+  futureHeldState: HeldState,
+  previousHeldState: HeldState,
+  atIso: string,
+): HeldState {
+  if (endResolution === 'hold_new_final') {
+    return futureHeldState
+  }
+
+  if (endResolution === 'resume_previous_held' && previousHeldState.actionFamily) {
+    return {
+      ...previousHeldState,
+      lastUpdatedAt: atIso,
+    }
+  }
+
+  return {
+    ...DEFAULT_SESSION_STATE.heldState,
+  }
+}
+
+async function finalizePlayback(
+  userId: string,
+  sequenceId: number,
+  reason: PlaybackCompletionReason,
+): Promise<void> {
+  const runtime = playbackRuntimes.get(userId)
+  if (!runtime || runtime.sequenceId !== sequenceId) return
+
+  clearPlaybackTimer(runtime)
+  playbackRuntimes.delete(userId)
+
+  const session = getRuntimeSession(userId)
+  const completionAt = new Date().toISOString()
+  const orderedBeats = getOrderedResolvedBeats(runtime.plan)
+  const lastBeatIndex = orderedBeats.length > 0 ? orderedBeats.length - 1 : null
+  const nextHeldState = resolveHeldStateAfterPlayback(
+    runtime.plan.endResolution,
+    runtime.futureHeldState,
+    runtime.previousHeldState,
+    completionAt,
+  )
+
+  const shouldRemainHeld = runtime.plan.endResolution === 'hold_new_final'
+  const nextScheduler: SchedulerState =
+    reason === 'completed' && shouldRemainHeld
+      ? {
+          status: 'holding',
+          activePlanMessageId: runtime.plan.messageId,
+          activeBeatIndex: lastBeatIndex,
+          activeBeatStartedAt: completionAt,
+          playbackCycle: Math.max(session.scheduler.playbackCycle, 1),
+          lastCompletionReason: reason,
+        }
+      : {
+          ...DEFAULT_SCHEDULER_STATE,
+          status: reason === 'completed' ? 'idle' : 'stopped',
+          lastCompletionReason: reason,
+        }
+
+  const nextSession: SessionState = {
+    ...session,
+    activeMessageId: shouldRemainHeld ? runtime.plan.messageId : null,
+    lastUpdatedAt: completionAt,
+    heldState: nextHeldState,
+    parserSession: {
+      ...session.parserSession,
+      currentHeldStateRef: nextHeldState.sourceMessageId,
+      continuityMemory: {
+        ...session.parserSession.continuityMemory,
+        lastSchedulerStatus: nextScheduler.status,
+        lastSchedulerCompletionAt: completionAt,
+        lastSchedulerCompletionReason: reason,
+      },
+    },
+    scheduler: nextScheduler,
+  }
+
+  runtimeSessions.set(userId, nextSession)
+  activeChatIds.set(userId, runtime.chatId)
+  await broadcastSessionState(userId, runtime.chatId, runtime.characterId)
+}
+
+async function advancePlayback(userId: string, sequenceId: number): Promise<void> {
+  const runtime = playbackRuntimes.get(userId)
+  if (!runtime || runtime.sequenceId !== sequenceId) return
+
+  const session = getRuntimeSession(userId)
+  const orderedBeats = getOrderedResolvedBeats(runtime.plan)
+  const currentIndex = session.scheduler.activeBeatIndex ?? 0
+  const nextIndex = currentIndex + 1
+  const advancedAt = new Date().toISOString()
+
+  if (nextIndex >= orderedBeats.length) {
+    if (runtime.plan.endResolution === 'loop_current_plan' && orderedBeats.length > 0) {
+      const nextSession: SessionState = {
+        ...session,
+        lastUpdatedAt: advancedAt,
+        scheduler: {
+          status: 'looping',
+          activePlanMessageId: runtime.plan.messageId,
+          activeBeatIndex: 0,
+          activeBeatStartedAt: advancedAt,
+          playbackCycle: Math.max(session.scheduler.playbackCycle, 1) + 1,
+          lastCompletionReason: null,
+        },
+      }
+
+      runtimeSessions.set(userId, nextSession)
+      await broadcastSessionState(userId, runtime.chatId, runtime.characterId)
+      scheduleActiveBeat(userId, sequenceId)
+      return
+    }
+
+    await finalizePlayback(userId, sequenceId, 'completed')
+    return
+  }
+
+  const nextSession: SessionState = {
+    ...session,
+    lastUpdatedAt: advancedAt,
+    scheduler: {
+      ...session.scheduler,
+      status: 'playing',
+      activePlanMessageId: runtime.plan.messageId,
+      activeBeatIndex: nextIndex,
+      activeBeatStartedAt: advancedAt,
+      playbackCycle: Math.max(session.scheduler.playbackCycle, 1),
+      lastCompletionReason: null,
+    },
+  }
+
+  runtimeSessions.set(userId, nextSession)
+  await broadcastSessionState(userId, runtime.chatId, runtime.characterId)
+  scheduleActiveBeat(userId, sequenceId)
+}
+
+function scheduleActiveBeat(userId: string, sequenceId: number) {
+  const runtime = playbackRuntimes.get(userId)
+  if (!runtime || runtime.sequenceId !== sequenceId) return
+
+  const session = getRuntimeSession(userId)
+  const orderedBeats = getOrderedResolvedBeats(runtime.plan)
+  const activeIndex = session.scheduler.activeBeatIndex ?? 0
+  const activeBeat = orderedBeats[activeIndex]
+
+  if (!activeBeat) {
+    void finalizePlayback(userId, sequenceId, 'completed')
+    return
+  }
+
+  clearPlaybackTimer(runtime)
+  runtime.timer = setTimeout(() => {
+    void advancePlayback(userId, sequenceId)
+  }, Math.max(activeBeat.durationMs, 25))
+}
+
+async function startPlaybackScheduler(
+  userId: string,
+  chatId: string | null,
+  characterId: string | null,
+  plan: MessagePlan,
+  previousHeldState: HeldState,
+  futureHeldState: HeldState,
+  contactZone: UserContactZone,
+): Promise<void> {
+  cancelPlaybackRuntime(userId)
+
+  const session = getRuntimeSession(userId)
+  const startedAt = new Date().toISOString()
+  const sequenceId = ++playbackSequenceCounter
+  const nextSession: SessionState = {
+    ...session,
+    activeChatId: chatId,
+    activeCharacterId: characterId,
+    activeMessageId: plan.messageId,
+    lastPlayedMessageId: plan.messageId,
+    lastUpdatedAt: startedAt,
+    scheduler: {
+      status: 'playing',
+      activePlanMessageId: plan.messageId,
+      activeBeatIndex: 0,
+      activeBeatStartedAt: startedAt,
+      playbackCycle: 1,
+      lastCompletionReason: null,
+    },
+    parserSession: {
+      ...session.parserSession,
+      continuityMemory: {
+        ...session.parserSession.continuityMemory,
+        lastSchedulerStatus: 'playing',
+        lastSchedulerStartedAt: startedAt,
+      },
+    },
+  }
+
+  runtimeSessions.set(userId, nextSession)
+  playbackRuntimes.set(userId, {
+    sequenceId,
+    timer: null,
+    plan,
+    previousHeldState: {
+      ...previousHeldState,
+    },
+    futureHeldState: {
+      ...futureHeldState,
+    },
+    chatId,
+    characterId,
+    contactZone,
+  })
+
+  await broadcastSessionState(userId, chatId, characterId)
+  scheduleActiveBeat(userId, sequenceId)
 }
 
 async function listAvailableConnections(userId: string): Promise<ConnectionProfileSummary[]> {
@@ -3273,6 +3543,8 @@ async function handleFrontendMessage(
         let nextHeldState = { ...current.heldState }
         let currentHeldStateRef = current.parserSession.currentHeldStateRef
         let continuityMemoryPatch: Record<string, unknown> = {}
+        let nextScheduler = { ...current.scheduler }
+        let plannedHeldState: HeldState | null = null
 
         if (payload.payload.chatId && nextActiveMessageId) {
           const nextPlan = await buildMessagePlan(
@@ -3301,9 +3573,27 @@ async function handleFrontendMessage(
 
           nextRuntimePlans.previousPlan = current.runtimePlans.currentPlan
           nextRuntimePlans.currentPlan = controllerResult.plan
-          nextHeldState = controllerResult.heldState
-          currentHeldStateRef = controllerResult.currentHeldStateRef
+          nextHeldState = { ...current.heldState }
+          currentHeldStateRef = current.parserSession.currentHeldStateRef
           continuityMemoryPatch = controllerResult.continuityMemoryPatch
+          plannedHeldState = controllerResult.heldState
+          nextScheduler = {
+            status: 'playing',
+            activePlanMessageId: payload.payload.messageId,
+            activeBeatIndex: 0,
+            activeBeatStartedAt: new Date().toISOString(),
+            playbackCycle: 1,
+            lastCompletionReason: null,
+          }
+        } else if (current.activeMessageId === payload.payload.messageId) {
+          cancelPlaybackRuntime(userId)
+          nextHeldState = { ...DEFAULT_SESSION_STATE.heldState }
+          currentHeldStateRef = null
+          nextScheduler = {
+            ...DEFAULT_SCHEDULER_STATE,
+            status: 'stopped',
+            lastCompletionReason: 'stopped',
+          }
         }
 
         const nextSession: SessionState = {
@@ -3330,28 +3620,35 @@ async function handleFrontendMessage(
                     lastPlayArmedAt: new Date().toISOString(),
                     ...continuityMemoryPatch,
                   }
-                : current.parserSession.continuityMemory,
+                : {
+                    ...current.parserSession.continuityMemory,
+                    lastSchedulerStatus: nextScheduler.status,
+                  },
             currentHeldStateRef,
           },
-          heldState: nextActiveMessageId !== null ? nextHeldState : current.heldState,
+          heldState: nextActiveMessageId !== null ? nextHeldState : nextHeldState,
+          scheduler: nextScheduler,
           runtimePlans: nextRuntimePlans,
         }
 
         runtimeSessions.set(userId, nextSession)
         activeChatIds.set(userId, payload.payload.chatId)
 
-        const bootstrap = await buildBootstrap(
-          userId,
-          payload.payload.chatId,
-          payload.payload.characterId,
-        )
-        sendToUser(
-          {
-            type: 'lummate.phase1.session_state',
-            payload: bootstrap,
-          },
-          userId,
-        )
+        if (payload.payload.chatId && nextActiveMessageId && nextRuntimePlans.currentPlan && plannedHeldState) {
+          await startPlaybackScheduler(
+            userId,
+            payload.payload.chatId,
+            payload.payload.characterId,
+            nextRuntimePlans.currentPlan,
+            current.heldState,
+            plannedHeldState,
+            (await readChatTrackingPreferences(spindle, userId, payload.payload.chatId, settings))
+              .primaryContactZone,
+          )
+          return
+        }
+
+        await broadcastSessionState(userId, payload.payload.chatId, payload.payload.characterId)
         return
       }
       case 'lummate.phase3.regenerate': {
@@ -3364,6 +3661,7 @@ async function handleFrontendMessage(
           payload.payload.chatId,
           payload.payload.characterId,
         )
+        cancelPlaybackRuntime(userId)
         const settings = await readUserSettings(spindle, userId)
         const regeneratedPlan = await buildMessagePlan(
           payload.payload.chatId,
@@ -3394,14 +3692,23 @@ async function handleFrontendMessage(
           activeChatId: payload.payload.chatId,
           activeCharacterId: payload.payload.characterId,
           lastUpdatedAt: new Date().toISOString(),
-          heldState: controllerResult.heldState,
+          activeMessageId: payload.payload.messageId,
+          heldState: current.heldState,
           parserSession: {
             ...current.parserSession,
-            currentHeldStateRef: controllerResult.currentHeldStateRef,
+            currentHeldStateRef: current.parserSession.currentHeldStateRef,
             continuityMemory: {
               ...current.parserSession.continuityMemory,
               ...controllerResult.continuityMemoryPatch,
             },
+          },
+          scheduler: {
+            status: 'playing',
+            activePlanMessageId: payload.payload.messageId,
+            activeBeatIndex: 0,
+            activeBeatStartedAt: new Date().toISOString(),
+            playbackCycle: 1,
+            lastCompletionReason: null,
           },
           runtimePlans: {
             ...current.runtimePlans,
@@ -3411,18 +3718,14 @@ async function handleFrontendMessage(
 
         runtimeSessions.set(userId, nextSession)
         activeChatIds.set(userId, payload.payload.chatId)
-
-        const bootstrap = await buildBootstrap(
+        await startPlaybackScheduler(
           userId,
           payload.payload.chatId,
           payload.payload.characterId,
-        )
-        sendToUser(
-          {
-            type: 'lummate.phase1.session_state',
-            payload: bootstrap,
-          },
-          userId,
+          controllerResult.plan,
+          current.heldState,
+          controllerResult.heldState,
+          chatPreferences.primaryContactZone,
         )
         return
       }
@@ -3438,8 +3741,11 @@ async function handleFrontendMessage(
         let currentHeldStateRef = current.parserSession.currentHeldStateRef
         let continuityMemoryPatch: Record<string, unknown> = {}
         let nextPlan = currentPlan
+        let nextScheduler = { ...current.scheduler }
+        let plannedHeldState: HeldState | null = null
 
         if (currentPlan && payload.payload.chatId) {
+          cancelPlaybackRuntime(userId)
           const chatPreferences = await readChatTrackingPreferences(
             spindle,
             userId,
@@ -3458,9 +3764,18 @@ async function handleFrontendMessage(
             new Date().toISOString(),
           )
           nextPlan = controllerResult.plan
-          nextHeldState = controllerResult.heldState
-          currentHeldStateRef = controllerResult.currentHeldStateRef
+          nextHeldState = current.heldState
+          currentHeldStateRef = current.parserSession.currentHeldStateRef
           continuityMemoryPatch = controllerResult.continuityMemoryPatch
+          plannedHeldState = controllerResult.heldState
+          nextScheduler = {
+            status: 'playing',
+            activePlanMessageId: payload.payload.messageId,
+            activeBeatIndex: 0,
+            activeBeatStartedAt: new Date().toISOString(),
+            playbackCycle: 1,
+            lastCompletionReason: null,
+          }
         }
 
         const nextSession: SessionState = {
@@ -3468,6 +3783,7 @@ async function handleFrontendMessage(
           activeCharacterId: payload.payload.characterId,
           lastUpdatedAt: new Date().toISOString(),
           heldState: nextHeldState,
+          scheduler: nextScheduler,
           parserSession: {
             ...current.parserSession,
             currentHeldStateRef,
@@ -3488,18 +3804,27 @@ async function handleFrontendMessage(
         runtimeSessions.set(userId, nextSession)
         activeChatIds.set(userId, payload.payload.chatId)
 
-        const bootstrap = await buildBootstrap(
-          userId,
-          payload.payload.chatId,
-          payload.payload.characterId,
-        )
-        sendToUser(
-          {
-            type: 'lummate.phase1.session_state',
-            payload: bootstrap,
-          },
-          userId,
-        )
+        if (payload.payload.chatId && nextPlan && plannedHeldState) {
+          const settings = await readUserSettings(spindle, userId)
+          const chatPreferences = await readChatTrackingPreferences(
+            spindle,
+            userId,
+            payload.payload.chatId,
+            settings,
+          )
+          await startPlaybackScheduler(
+            userId,
+            payload.payload.chatId,
+            payload.payload.characterId,
+            nextPlan,
+            current.heldState,
+            plannedHeldState,
+            chatPreferences.primaryContactZone,
+          )
+          return
+        }
+
+        await broadcastSessionState(userId, payload.payload.chatId, payload.payload.characterId)
         return
       }
       case 'lummate.phase3.set_tracking_preferences': {

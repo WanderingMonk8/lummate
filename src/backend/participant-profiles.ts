@@ -12,6 +12,9 @@ interface ParticipantSourceSnapshot {
   participantKind: ParticipantKind
   participantId: string
   displayName: string
+  aliasHints: string[]
+  sourceCardId: string | null
+  sourceCardName: string | null
   sourceUpdatedAt: number | null
   sourcePreview: string
   combinedText: string
@@ -30,6 +33,9 @@ function buildFingerprint(source: ParticipantSourceSnapshot): string {
     source.participantKind,
     source.participantId,
     source.displayName,
+    source.aliasHints.join('|'),
+    source.sourceCardId ?? '',
+    source.sourceCardName ?? '',
     source.sourceUpdatedAt ?? '',
     normalizeText(source.combinedText),
   ].join('||')
@@ -113,6 +119,9 @@ function createProfileFromSource(source: ParticipantSourceSnapshot): Participant
     participantKind: source.participantKind,
     participantId: source.participantId,
     displayName: source.displayName,
+    aliasHints: source.aliasHints,
+    sourceCardId: source.sourceCardId,
+    sourceCardName: source.sourceCardName,
     sourceFingerprint: buildFingerprint(source),
     sourceUpdatedAt: source.sourceUpdatedAt,
     sourcePreview: source.sourcePreview,
@@ -145,6 +154,9 @@ function buildCharacterSource(character: CharacterDTO): ParticipantSourceSnapsho
     participantKind: 'character',
     participantId: character.id,
     displayName: character.name,
+    aliasHints: [character.name],
+    sourceCardId: character.id,
+    sourceCardName: character.name,
     sourceUpdatedAt: character.updated_at ?? null,
     sourcePreview,
     combinedText,
@@ -165,10 +177,77 @@ function buildPersonaSource(persona: PersonaDTO): ParticipantSourceSnapshot {
     participantKind: 'persona',
     participantId: persona.id,
     displayName: persona.name,
+    aliasHints: [persona.name],
+    sourceCardId: persona.id,
+    sourceCardName: persona.name,
     sourceUpdatedAt: persona.updated_at ?? null,
     sourcePreview,
     combinedText,
   }
+}
+
+function slugifyParticipantName(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+}
+
+function splitCompositeCharacterNames(name: string): string[] {
+  return name
+    .split(/\s*(?:&|\/|,|\band\b|\+)\s*/i)
+    .map((part) => part.trim())
+    .filter((part) => part.length >= 2)
+}
+
+function buildParticipantAliasHints(displayName: string): string[] {
+  const tokens = displayName
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 2)
+
+  return [...new Set([displayName, ...tokens])]
+}
+
+function extractParticipantFocusedText(combinedText: string, aliasHints: string[]): string {
+  const sentences = combinedText
+    .split(/(?<=[.!?])\s+/)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean)
+
+  const matchingSentences = sentences.filter((sentence) =>
+    aliasHints.some((alias) => new RegExp(`\\b${alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(sentence)),
+  )
+
+  if (matchingSentences.length === 0) {
+    return combinedText
+  }
+
+  return matchingSentences.join('\n')
+}
+
+function buildCharacterSources(character: CharacterDTO): ParticipantSourceSnapshot[] {
+  const baseSource = buildCharacterSource(character)
+  const participantNames = splitCompositeCharacterNames(character.name)
+
+  if (participantNames.length <= 1) {
+    return [baseSource]
+  }
+
+  return participantNames.map((participantName) => {
+    const aliasHints = buildParticipantAliasHints(participantName)
+    return {
+      participantKind: 'character' as const,
+      participantId: `${character.id}::${slugifyParticipantName(participantName)}`,
+      displayName: participantName,
+      aliasHints,
+      sourceCardId: character.id,
+      sourceCardName: character.name,
+      sourceUpdatedAt: character.updated_at ?? null,
+      sourcePreview: baseSource.sourcePreview,
+      combinedText: extractParticipantFocusedText(baseSource.combinedText, aliasHints),
+    }
+  })
 }
 
 function buildProfileKey(participantKind: ParticipantKind, participantId: string): string {
@@ -304,7 +383,7 @@ export async function ensureParticipantProfileBundle(
   const userSource = persona ? buildPersonaSource(persona) : null
   const characterSources = characters
     .filter((character): character is CharacterDTO => Boolean(character))
-    .map(buildCharacterSource)
+    .flatMap(buildCharacterSources)
 
   const [userProfile, ...resolvedCharacterProfiles] = await Promise.all([
     ensureProfileFromSource(spindle, userId, userSource, options.forceUserRegenerate ?? false),

@@ -69,7 +69,7 @@ The parser should only care about configured intimate contact involving the user
 
 By default this means the user's genital contact zone, but the user should be able to override that default zone for a given roleplay context.
 
-Examples of alternate default user contact zones may include:
+Examples of alternate default tracked contact zones may include:
 
 - anus
 - mouth
@@ -464,6 +464,28 @@ Instead, the extension should separate:
 
 The same caching approach should apply to the user's own tactile profile where relevant.
 
+Character cards should not always be assumed to map one-to-one with a single participant.
+
+Some cards may actually describe:
+
+- multiple named characters
+- a pair or group presented in one card
+- a merged persona where the prose later treats those identities separately
+
+Because of this, the extension should distinguish between:
+
+- `character card source`
+- `participant identities extracted from that source`
+- `derived participant tactile profiles`
+
+Recommended behavior:
+
+1. when a character card is first encountered, the extension should determine whether it represents one participant or multiple participant identities
+2. if multiple participant identities are present, each one should receive its own cached participant profile
+3. each derived participant profile should still remember which character card source it came from
+4. later parsing and current-state tracking should operate on the participant identities, not only on the top-level card id
+5. regeneration should refresh all participant profiles derived from that card source
+
 Recommended behavior:
 
 1. when a character is first encountered, or when the extension is first enabled for that character, Lumiverse derives the tactile profile in the background
@@ -487,6 +509,8 @@ Recommended invalidation triggers:
 
 If possible, the extension should track a lightweight fingerprint or hash of the relevant character source fields so it can cheaply determine whether regeneration is necessary.
 
+If one character card yields multiple participant identities, the invalidation should apply to that whole source card and all participant profiles derived from it.
+
 ## Design Principle for Character Modulation
 
 Character traits should bias ranges and tendencies, not hard-code absolute output.
@@ -497,6 +521,29 @@ Example:
 - instead, strength-related beats should resolve higher within their allowed range than they would for a weak or tired character
 
 This preserves narrative meaning while making the tactile output feel more personalized and embodied.
+
+## Composite Character Cards
+
+The system should treat composite character cards as source containers, not as proof that only one participant exists.
+
+That means:
+
+- one card may yield one participant profile
+- one card may yield several participant profiles
+- current-state parsing may need to track several participant states that all originate from the same underlying card
+
+This matters for:
+
+- group scenes
+- parent/daughter or sibling pair cards
+- duo or trio cards written as a single entity
+- any card where the message later assigns separate actions, states, or speech to different named individuals
+
+In those cases, participant resolution should happen before profile derivation and before current-state tracking, so that:
+
+- each named participant can have its own profile
+- each named participant can have its own parsed current state
+- beat weighting can operate on actual participants rather than on one merged card identity
 
 ## Beat Timing
 
@@ -543,6 +590,17 @@ This makes the parser stable even when the prose is imprecise.
 
 ## Narrative-to-Duration Mapping
 
+The parser should default ongoing erotic contact to persistence unless the prose gives a reason to bound it.
+
+In practice, the parser should look first for:
+
+- discrete acts
+- explicit counts
+- explicit seconds or other direct time language
+- explicit pauses
+
+If those are not present, maintained erotic contact should default to `ongoing` rather than `short`.
+
 Examples of likely mappings:
 
 - "one deep thrust" -> `instant`
@@ -554,6 +612,8 @@ Examples of likely mappings:
 - "for a while" -> `long`
 - "keeps going" -> `extended` or `ongoing`
 - "continues" -> `ongoing`
+- "pauses" -> bounded interruption or `pause`
+- "holds still for a beat" -> brief pause, then resume if the surrounding action is still active
 
 These are parser defaults, not final playback times.
 
@@ -580,16 +640,27 @@ This gives the system a concrete output model while still respecting vague scene
 The controller should resolve beat duration in this order:
 
 1. explicit numeric time in the message, if present
-2. one-shot semantics such as "once" or "one deep thrust"
-3. narrative duration words mapped to duration classes
-4. action-type defaults when duration is implied but not stated
-5. user-configured duration table for final second values
+2. explicit pause or interruption language
+3. one-shot or other discrete semantics such as "once" or "one deep thrust"
+4. explicit count semantics such as "twenty strokes"
+5. narrative duration words mapped to duration classes
+6. default ongoing persistence when erotic contact is maintained but not temporally bounded
+7. user-configured duration table for final second values
 
 This allows the parser to stay semantically grounded while still producing exact timing values for XToys playback.
 
 ## Action-Type Default Durations
 
-When a message implies contact but gives no duration words at all, the parser may fall back to action-type defaults.
+Action-type defaults should be used cautiously.
+
+When a message implies contact but gives no duration words at all, the parser should not automatically collapse the action into a short beat.
+
+Instead:
+
+- discrete acts may still use short action-type defaults
+- explicit counted actions may use bounded repeated defaults
+- maintained erotic contact should default to `ongoing`
+- action-type defaults should mainly help choose relative shape when a bounded action is clearly present but incompletely specified
 
 Examples:
 
@@ -610,6 +681,7 @@ Examples:
 - "one deep thrust" may have `duration_class = instant` and `persistence = instant`
 - "slow strokes continue" may have `duration_class = medium` for the immediate beat, but `persistence = ongoing`
 - "firm suction lingers" may have `duration_class = long` and `persistence = sustained`
+- "she pauses, then resumes sucking" may have a brief pause beat, while suction remains the surrounding ongoing action before and after the pause
 
 This distinction matters because a beat may play for a short concrete time while still implying a held final state afterward.
 
@@ -785,6 +857,7 @@ The breakout bubble may contain:
 
 - `Regenerate`
 - playback mode toggle: `Play Once`, `Loop`, `Play Once and Hold`
+- tracked participant selector, defaulting to the user persona but allowing any current chat participant to become the focal tracked participant
 
 This keeps the default interaction simple while still exposing advanced control per message when needed.
 
@@ -1230,7 +1303,8 @@ If genital contact is not clear, the parser should do nothing.
 Likely user settings include:
 
 - playback style
-- default user contact zone for the current roleplay
+- default tracked contact zone for the current roleplay
+- per-chat tracked participant override, persisted when the user leaves and later reopens that chat
 - respect narrative duration
 - allow one-shot override
 - per-character tactile profile tuning
@@ -1324,6 +1398,30 @@ This feature can be added later as a multi-toy routing layer where:
 - participant inclusion may be evaluated separately for each relevant user zone
 - participant inclusion, weighting, and contact filtering may be resolved separately per toy path
 - Lumiverse may choose whether a scene should produce one combined tactile result or several parallel toy-specific results
+
+### True Action Blending
+
+V1 should not promise faithful simultaneous semantic blending of multiple tactile actions on a single toy path.
+
+Although the planner may still use composite blending internally, true action blending such as:
+
+- stroking while sucking
+- thrusting while licking
+- grinding while pulsing
+
+should be treated as a deferred feature until XToys-side implementation and real-device testing confirm how realistic it is.
+
+For now:
+
+- `replace` is a reliable core transition mode
+- `modulate` is a reliable core transition mode
+- `blend` should default to planner-side compositing into one resultant tactile profile
+
+Later versions may support richer parallel blending when:
+
+- the user has calibrated multi-toy or multi-channel output
+- the XToys script explicitly supports concurrent routed actions
+- real testing confirms the felt result is believable rather than muddy or contradictory
 
 ## Potential Issues
 

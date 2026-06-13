@@ -102,6 +102,7 @@ Deliverables:
 - message-level loading indicator
 - `Regenerate` action
 - per-message playback mode selection: `Play Once`, `Loop`, `Play Once and Hold`
+- per-chat tracked participant selector in the breakout menu, defaulting to the user persona
 
 Feasibility assessment:
 
@@ -143,6 +144,7 @@ Goal:
 Deliverables:
 
 - character profile derivation pipeline
+- composite character-card participant extraction
 - user profile derivation pipeline
 - cached profile storage
 - source fingerprinting
@@ -153,6 +155,12 @@ Feasibility assessment:
 - strongly supported
 - `spindle.userStorage` gives per-user persistent storage for derived profiles and overrides
 - this is a good fit for Lumiverse's storage model
+
+Implementation note:
+
+- a single Lumiverse character card may need to yield several participant profiles
+- the cache should therefore distinguish between `source card id` and `derived participant id`
+- regeneration and invalidation should apply at the card-source level, while runtime planning should operate at the participant level
 
 ### Phase 6: Current-State Parsing
 
@@ -167,12 +175,18 @@ Deliverables:
 - baseline fallback logic
 - state schema shared with the modulation layer
 - parsed-state provenance and fallback markers
+- support for multiple participant states originating from one character card
 
 Feasibility assessment:
 
 - feasible
 - parser logic is custom, but Lumiverse supports backend generation calls and connection profile selection
 - users can select a cheaper parser connection profile instead of using their main roleplay connection
+
+Implementation note:
+
+- current-state parsing should attach to resolved participant identities, not only to top-level character card ids
+- if one card contains several named identities, each one may need its own parsed state during a scene
 
 ### Phase 7: Semantic Beat Planner
 
@@ -238,6 +252,7 @@ Feasibility assessment:
 - feasible
 - this is custom controller logic on the Lumiverse side
 - per-chat persistence is supported through `userStorage`
+- tracked participant and tracked contact zone should persist per chat independently from volatile playback session state
 - blend realism remains a tested constraint on the XToys side, but controller logic can still be implemented now
 
 ### Phase 10: Lumiverse Beat Scheduler

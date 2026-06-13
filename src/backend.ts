@@ -4,10 +4,13 @@ import type {
   ActionCalibrationPreset,
   ActionType,
   BackendToFrontendMessage,
+  ChatTrackingPreferences,
   ConnectionProfileSummary,
   FrontendToBackendMessage,
   MessagePlan,
   PlaybackMode,
+  ParticipantKind,
+  ParticipantProfile,
   ParticipantProfileBundle,
   UserContactZone,
   ParticipantStateAssignment,
@@ -19,7 +22,12 @@ import type {
 } from './shared/contracts'
 import type { LlmMessageDTO } from 'lumiverse-spindle-types'
 import { ensureParticipantProfileBundle } from './backend/participant-profiles'
-import { readUserSettings, writeUserSettings } from './backend/storage'
+import {
+  readChatTrackingPreferences,
+  readUserSettings,
+  writeChatTrackingPreferences,
+  writeUserSettings,
+} from './backend/storage'
 import { DEFAULT_RUNTIME_PLAN_BUFFER, DEFAULT_SESSION_STATE } from './shared/contracts'
 
 interface LlmParserParticipantStatePayload {
@@ -67,7 +75,7 @@ interface LlmParserScenePayload {
 const PARSE_SCENE_TOOL = {
   name: 'parse_tactile_scene',
   description:
-    'Parse one assistant roleplay message into relevant tactile beats, participant inclusion, participant states, and continuity relative to the user contact zone.',
+    'Parse one assistant roleplay message into relevant tactile beats, participant inclusion, participant states, and continuity relative to the tracked participant contact zone.',
   parameters: {
     type: 'object',
     additionalProperties: false,
@@ -237,9 +245,13 @@ function syncSessionToChat(
 
 async function buildBootstrap(userId: string, chatId: string | null, characterId: string | null) {
   const settings = await readUserSettings(spindle, userId)
+  const [chatPreferences, participantProfiles] = await Promise.all([
+    readChatTrackingPreferences(spindle, userId, chatId, settings),
+    getParticipantProfilesSafely(userId, chatId, characterId),
+  ])
   const session = syncSessionToChat(userId, chatId, characterId)
 
-  return { settings, session }
+  return { settings, session, chatPreferences, participantProfiles }
 }
 
 async function listAvailableConnections(userId: string): Promise<ConnectionProfileSummary[]> {
@@ -277,14 +289,16 @@ async function buildSettingsBootstrap(
   settings: UserSettings
   availableConnections: ConnectionProfileSummary[]
   participantProfiles: ParticipantProfileBundle
+  chatPreferences: ChatTrackingPreferences
 }> {
-  const [settings, availableConnections, participantProfiles] = await Promise.all([
-    readUserSettings(spindle, userId),
+  const settings = await readUserSettings(spindle, userId)
+  const [availableConnections, participantProfiles, chatPreferences] = await Promise.all([
     listAvailableConnections(userId),
     getParticipantProfilesSafely(userId, chatId, characterId),
+    readChatTrackingPreferences(spindle, userId, chatId, settings),
   ])
 
-  return { settings, availableConnections, participantProfiles }
+  return { settings, availableConnections, participantProfiles, chatPreferences }
 }
 
 async function getParticipantProfilesSafely(
@@ -371,6 +385,69 @@ function buildUserPossessiveReferenceHints(participantProfiles: ParticipantProfi
   }
 
   return [...new Set(hints)]
+}
+
+function resolveTrackedParticipantProfile(
+  participantProfiles: ParticipantProfileBundle,
+  chatPreferences: ChatTrackingPreferences,
+): ParticipantProfile | null {
+  if (chatPreferences.trackedParticipantKind === 'persona') {
+    return participantProfiles.userProfile
+  }
+
+  if (chatPreferences.trackedParticipantId) {
+    return (
+      participantProfiles.characterProfiles.find(
+        (profile) => profile.participantId === chatPreferences.trackedParticipantId,
+      ) ?? null
+    )
+  }
+
+  return participantProfiles.userProfile
+}
+
+function buildTrackedReferenceHints(
+  participantProfiles: ParticipantProfileBundle,
+  chatPreferences: ChatTrackingPreferences,
+): string[] {
+  const trackedProfile = resolveTrackedParticipantProfile(participantProfiles, chatPreferences)
+
+  if (!trackedProfile || trackedProfile.participantKind === 'persona') {
+    return buildUserReferenceHints(participantProfiles)
+  }
+
+  const hints = [trackedProfile.displayName, ...trackedProfile.aliasHints]
+
+  for (const token of trackedProfile.displayName.split(/\s+/)) {
+    if (token.trim().length >= 2) {
+      hints.push(token.trim())
+    }
+  }
+
+  return [...new Set(hints.filter((hint) => hint.trim().length > 0))]
+}
+
+function buildTrackedPossessiveReferenceHints(
+  participantProfiles: ParticipantProfileBundle,
+  chatPreferences: ChatTrackingPreferences,
+): string[] {
+  const trackedProfile = resolveTrackedParticipantProfile(participantProfiles, chatPreferences)
+
+  if (!trackedProfile || trackedProfile.participantKind === 'persona') {
+    return buildUserPossessiveReferenceHints(participantProfiles)
+  }
+
+  const hints = [`${trackedProfile.displayName}'s`, `${trackedProfile.displayName.toLowerCase()}'s`]
+
+  for (const alias of trackedProfile.aliasHints) {
+    const trimmedAlias = alias.trim()
+    if (trimmedAlias.length > 0) {
+      hints.push(`${trimmedAlias}'s`)
+      hints.push(`${trimmedAlias.toLowerCase()}'s`)
+    }
+  }
+
+  return [...new Set(hints.filter((hint) => hint.trim().length > 0))]
 }
 
 function resolveDurationMsFromClass(durationClass: SemanticBeat['durationClass']): number {
@@ -544,6 +621,103 @@ function resolveDurationMsFromCount(
   return Math.max(1200, Math.round(explicitCount * basePerCycleMs * deliberateMultiplier))
 }
 
+function hasExplicitPauseCue(text: string): boolean {
+  return /\b(pause|pauses|paused|pausing|holds still|holds herself still|holds himself still|goes still|stills|stops moving|waits a beat|for a beat)\b/i.test(
+    text,
+  )
+}
+
+function hasDiscreteActCue(text: string): boolean {
+  return /\b(once|single|briefly|just long enough|quick(?:ly)?|one quick|one deep|one firm|one slow)\b/i.test(
+    text,
+  )
+}
+
+function hasBoundedRepeatedCue(text: string): boolean {
+  return /\b(a few|a couple|several)\b/i.test(text)
+}
+
+function inferDeterministicDurationProfile(
+  actionType: ActionType,
+  clause: string,
+): {
+  durationMs: number
+  durationClass: SemanticBeat['durationClass']
+  countHint: SemanticBeat['countHint']
+  persistence: string
+  fallbackBehavior: SemanticBeat['fallbackBehavior']
+} {
+  const normalized = clause.toLowerCase()
+  const explicitDurationSeconds = parseExplicitDurationSeconds(clause)
+  const explicitCount = parseExplicitCountHint(clause)
+  const explicitPause = hasExplicitPauseCue(clause)
+  const discreteAct = hasDiscreteActCue(clause)
+  const boundedRepeated = hasBoundedRepeatedCue(clause)
+
+  if (explicitPause) {
+    const durationMs = explicitDurationSeconds != null ? explicitDurationSeconds * 1000 : 1500
+    return {
+      durationMs,
+      durationClass: resolveDurationClassFromMs(durationMs),
+      countHint: 'one_shot',
+      persistence: 'brief',
+      fallbackBehavior: 'resume_previous',
+    }
+  }
+
+  if (explicitDurationSeconds != null) {
+    const durationMs = explicitDurationSeconds * 1000
+    return {
+      durationMs,
+      durationClass: resolveDurationClassFromMs(durationMs),
+      countHint: explicitCount != null ? resolveCountHintFromCount(explicitCount) : 'unknown',
+      persistence: durationMs >= 12000 ? 'ongoing' : durationMs >= 4000 ? 'sustained' : 'brief',
+      fallbackBehavior: durationMs >= 12000 ? 'hold_last' : 'resume_previous',
+    }
+  }
+
+  if (explicitCount != null) {
+    const durationMs = resolveDurationMsFromCount(actionType, explicitCount, clause) ?? 2500
+    return {
+      durationMs,
+      durationClass: resolveDurationClassFromMs(durationMs),
+      countHint: resolveCountHintFromCount(explicitCount),
+      persistence: durationMs >= 10000 ? 'ongoing' : 'brief',
+      fallbackBehavior: durationMs >= 10000 ? 'hold_last' : 'resume_previous',
+    }
+  }
+
+  if (discreteAct) {
+    const durationMs = /\b(single|once|one)\b/i.test(normalized) ? 1200 : 1800
+    return {
+      durationMs,
+      durationClass: resolveDurationClassFromMs(durationMs),
+      countHint: 'one_shot',
+      persistence: 'brief',
+      fallbackBehavior: 'resume_previous',
+    }
+  }
+
+  if (boundedRepeated) {
+    const durationMs = 4500
+    return {
+      durationMs,
+      durationClass: resolveDurationClassFromMs(durationMs),
+      countHint: 'few',
+      persistence: 'brief',
+      fallbackBehavior: 'resume_previous',
+    }
+  }
+
+  return {
+    durationMs: 12000,
+    durationClass: 'ongoing',
+    countHint: 'continuous',
+    persistence: 'ongoing',
+    fallbackBehavior: 'hold_last',
+  }
+}
+
 function normalizeContinuityVerdict(value: unknown): MessagePlan['continuityVerdict'] {
   return value === 'continue' ||
     value === 'progress' ||
@@ -632,6 +806,90 @@ function normalizeBeatWeights(actorWeight: number, acteeWeight: number) {
   }
 }
 
+function inferDeterministicResponseMode(clause: string, fullContent: string): SemanticBeat['responseMode'] {
+  const normalizedClause = clause.toLowerCase()
+  const normalizedContent = fullContent.toLowerCase()
+  const combined = `${normalizedClause} ${normalizedContent}`
+
+  if (
+    /\b(withdraw|withdraws|pulls back|pull away|pulls away|shies|shy away|retreats|hesitates|resists|tense(?:s|d)? away|goes still)\b/i.test(
+      combined,
+    )
+  ) {
+    return 'withdraw'
+  }
+
+  if (
+    /\b(counterpoint|in counterpoint|together|simultaneously|at the same time|without speaking|in rhythm|their rhythm|trade between|trading between|one rising as the other descends|both of you|both work|unbroken circuit|work her simultaneously|never leaving your skin|building a rhythm)\b/i.test(
+      combined,
+    )
+  ) {
+    return 'mutual'
+  }
+
+  if (
+    /\b(meet(?:ing|s)?|meeting|press(?:es|ing)? back|bucks? against|chasing the pressure|takes more|take more|holds there|working around you|swallows around you|grip(?:s|ping)? your thighs|jaw stretches|greedy|demanding|takes you deep|take you deep|throat opening|opens to accommodate|mouth replaces|replaces her without hesitation)\b/i.test(
+      combined,
+    )
+  ) {
+    return 'meet'
+  }
+
+  return 'lead'
+}
+
+function inferDeterministicBeatWeights(
+  responseMode: SemanticBeat['responseMode'],
+): { actorWeight: number; acteeWeight: number } {
+  switch (responseMode) {
+    case 'mutual':
+      return { actorWeight: 0.5, acteeWeight: 0.5 }
+    case 'meet':
+      return { actorWeight: 0.55, acteeWeight: 0.45 }
+    case 'withdraw':
+      return { actorWeight: 0.78, acteeWeight: 0.22 }
+    case 'lead':
+    default:
+      return { actorWeight: 0.68, acteeWeight: 0.32 }
+  }
+}
+
+function resolveCombinedResponseFactors(semanticBeat: SemanticBeat) {
+  const closeness = 1 - Math.abs(semanticBeat.actorWeight - semanticBeat.acteeWeight)
+
+  switch (semanticBeat.responseMode) {
+    case 'meet': {
+      const amplitudeFactor =
+        (semanticBeat.actorWeight + semanticBeat.acteeWeight * 1.28) * (1 + closeness * 0.05)
+      const tempoFactor =
+        (semanticBeat.actorWeight + semanticBeat.acteeWeight * 1.34) * (1 + closeness * 0.08)
+      return { amplitudeFactor, tempoFactor }
+    }
+    case 'mutual': {
+      const amplitudeFactor =
+        (semanticBeat.actorWeight + semanticBeat.acteeWeight * 1.42) * (1 + closeness * 0.08)
+      const tempoFactor =
+        (semanticBeat.actorWeight + semanticBeat.acteeWeight * 1.48) * (1 + closeness * 0.12)
+      return { amplitudeFactor, tempoFactor }
+    }
+    case 'withdraw': {
+      const amplitudeFactor =
+        (semanticBeat.actorWeight + semanticBeat.acteeWeight * 0.58) * (1 - closeness * 0.02)
+      const tempoFactor =
+        (semanticBeat.actorWeight + semanticBeat.acteeWeight * 0.42) * (1 - closeness * 0.06)
+      return { amplitudeFactor, tempoFactor }
+    }
+    case 'lead':
+    default: {
+      const amplitudeFactor =
+        (semanticBeat.actorWeight + semanticBeat.acteeWeight * 1.08) * (1 + closeness * 0.01)
+      const tempoFactor =
+        (semanticBeat.actorWeight + semanticBeat.acteeWeight * 1.05) * (1 + closeness * 0.01)
+      return { amplitudeFactor, tempoFactor }
+    }
+  }
+}
+
 function sortBeatPayloads(beats: LlmParserBeatPayload[]) {
   return [...beats].sort((left, right) => {
     const leftOrder = typeof left.order_index === 'number' ? left.order_index : Number.MAX_SAFE_INTEGER
@@ -659,10 +917,9 @@ function matchCharacterProfileByLabel(
 
   return (
     participantProfiles.find((profile) =>
-      profile.displayName
-        .toLowerCase()
-        .split(/\s+/)
-        .some((token) => token.length >= 3 && normalizedLabel.includes(token)),
+      profile.aliasHints.some(
+        (alias) => alias.trim().length >= 2 && normalizedLabel.includes(alias.trim().toLowerCase()),
+      ),
     ) ?? null
   )
 }
@@ -671,6 +928,7 @@ function buildFallbackParticipantAssignments(
   messageId: string,
   content: string,
   participantProfiles: ParticipantProfileBundle,
+  chatPreferences: ChatTrackingPreferences,
   primaryUserContactZone: UserContactZone,
   customUserContactZone: string,
 ): ParticipantStateAssignment[] {
@@ -678,6 +936,7 @@ function buildFallbackParticipantAssignments(
     messageId,
     content,
     participantProfiles,
+    chatPreferences,
     primaryUserContactZone,
     customUserContactZone,
   )
@@ -688,6 +947,7 @@ function mapLlmParticipantsToAssignments(
   messageId: string,
   content: string,
   participantProfiles: ParticipantProfileBundle,
+  chatPreferences: ChatTrackingPreferences,
   primaryUserContactZone: UserContactZone,
   customUserContactZone: string,
 ): ParticipantStateAssignment[] {
@@ -699,6 +959,7 @@ function mapLlmParticipantsToAssignments(
     messageId,
     content,
     participantProfiles,
+    chatPreferences,
     primaryUserContactZone,
     customUserContactZone,
   )
@@ -752,23 +1013,29 @@ function mapLlmParticipantsToAssignments(
 async function runStructuredSceneParser(
   userId: string,
   settings: UserSettings,
+  chatPreferences: ChatTrackingPreferences,
   selectedContent: string,
   recentContext: Array<{ role: 'user' | 'assistant'; content: string }>,
   participantProfiles: ParticipantProfileBundle,
 ): Promise<LlmParserScenePayload | null> {
   const connectionId = resolveParserConnectionId(settings)
-  const userReferenceHints = buildUserReferenceHints(participantProfiles)
-  const userPossessiveReferenceHints = buildUserPossessiveReferenceHints(participantProfiles)
+  const trackedReferenceHints = buildTrackedReferenceHints(participantProfiles, chatPreferences)
+  const trackedPossessiveReferenceHints = buildTrackedPossessiveReferenceHints(
+    participantProfiles,
+    chatPreferences,
+  )
+  const trackedProfile = resolveTrackedParticipantProfile(participantProfiles, chatPreferences)
+  const trackedLabel = trackedProfile?.displayName ?? 'tracked participant'
   const contactZone =
-    settings.parser.primaryUserContactZone === 'custom'
-      ? `custom (${settings.parser.customUserContactZone || 'unspecified'})`
-      : settings.parser.primaryUserContactZone
+    chatPreferences.primaryContactZone === 'custom'
+      ? `custom (${chatPreferences.customContactZone || 'unspecified'})`
+      : chatPreferences.primaryContactZone
   const zoneScopedActionHints = extractZoneScopedActionHints(
     selectedContent,
-    settings.parser.primaryUserContactZone,
-    settings.parser.customUserContactZone,
-    userReferenceHints,
-    userPossessiveReferenceHints,
+    chatPreferences.primaryContactZone,
+    chatPreferences.customContactZone,
+    trackedReferenceHints,
+    trackedPossessiveReferenceHints,
   )
 
   const messages: LlmMessageDTO[] = [
@@ -777,10 +1044,10 @@ async function runStructuredSceneParser(
       content:
         [
           'You parse erotic roleplay text into structured tactile planning data.',
-          'Only include beats and participants directly connected to the user primary contact zone.',
-          'If the selected message does not clearly involve that user contact zone, return relevant=false and no beats.',
-          'The user contact zone must belong to the user, not just any participant in the scene.',
-          'If multiple simultaneous actions are present, keep only the actions applied to the user primary contact zone and ignore parallel actions on other body areas.',
+          'Only include beats and participants directly connected to the tracked participant primary contact zone.',
+          'If the selected message does not clearly involve that tracked participant contact zone, return relevant=false and no beats.',
+          'The tracked contact zone must belong to the tracked participant, not just any participant in the scene.',
+          'If multiple simultaneous actions are present, keep only the actions applied to the tracked participant primary contact zone and ignore parallel actions on other body areas.',
           'Infer ordered beats, continuity verdict, participant inclusion, participant sides, participant weights, and current participant states.',
           'Each beat must include transition_style, count_hint, and fallback_behavior.',
           'Each beat must include source_excerpt quoting the exact local phrase or sentence fragment that supports that beat.',
@@ -793,9 +1060,10 @@ async function runStructuredSceneParser(
     {
       role: 'user',
       content: [
-        `Primary user contact zone: ${contactZone}`,
-        `User-owned zone reference hints: ${userReferenceHints.join(', ')}`,
-        `User-owned possessive zone anchors: ${userPossessiveReferenceHints.join(', ')}`,
+        `Tracked participant: ${trackedLabel}`,
+        `Primary tracked contact zone: ${contactZone}`,
+        `Tracked zone reference hints: ${trackedReferenceHints.join(', ')}`,
+        `Tracked possessive zone anchors: ${trackedPossessiveReferenceHints.join(', ')}`,
         summarizeParticipantProfiles(participantProfiles),
         recentContext.length > 0
           ? `Recent context:\n${recentContext
@@ -803,8 +1071,8 @@ async function runStructuredSceneParser(
               .join('\n')}`
           : 'Recent context: none',
         zoneScopedActionHints.length > 0
-          ? `Zone-scoped local action hints near the user contact zone: ${zoneScopedActionHints.join(', ')}`
-          : 'Zone-scoped local action hints near the user contact zone: none',
+          ? `Zone-scoped local action hints near the tracked participant zone: ${zoneScopedActionHints.join(', ')}`
+          : 'Zone-scoped local action hints near the tracked participant zone: none',
         `Selected assistant message:\n${selectedContent}`,
       ].join('\n\n'),
     },
@@ -883,6 +1151,16 @@ function createBaselineParticipantState(messageId: string): ParticipantState {
 function detectActionType(content: string): ActionType {
   const normalized = content.toLowerCase()
 
+  if (
+    /\b(your\s+(cock|dick|penis|shaft)|cock|dick|penis|shaft)\b[^.!?]{0,40}\b(parts?|push(?:es|ing)?|press(?:es|ing)?|slides?|sliding|sinks?|sinking|buries?|enter(?:s|ing)?|disappears?|fill(?:s|ing)?|seat(?:s|ed|ing)?|hilt)\b/i.test(
+      normalized,
+    ) ||
+    /\b(to the hilt|sink deeper|shaft disappears into|slides past|past the ring of|inside her|inside him|inside them)\b/i.test(
+      normalized,
+    )
+  ) {
+    return 'thrust'
+  }
   if (normalized.includes('suction') || normalized.includes('suck')) return 'suction'
   if (normalized.includes('thrust')) return 'thrust'
   if (normalized.includes('grind')) return 'grind'
@@ -914,23 +1192,48 @@ function detectTempo(content: string, preset: ActionCalibrationPreset): number {
   return clamp(value, 0, 100)
 }
 
-function detectDurationMs(content: string): number {
+function detectDurationMs(content: string, actionTypeOverride?: ActionType | null): number {
   const normalized = content.toLowerCase()
+  const explicitDurationSeconds = parseExplicitDurationSeconds(content)
+  if (explicitDurationSeconds != null) {
+    return explicitDurationSeconds * 1000
+  }
 
-  if (/(one |single |once|brief|briefly|quick)\b/.test(normalized)) return 1200
-  if (/(long|linger|lingering|lasting|prolonged)\b/.test(normalized)) return 5000
-  if (/(continue|keeps|keeping|still|ongoing)\b/.test(normalized)) return 6500
-  return 3000
+  const explicitCount = parseExplicitCountHint(content)
+  const actionType = actionTypeOverride ?? detectActionType(content)
+  const countedDurationMs = resolveDurationMsFromCount(actionType, explicitCount, content)
+  if (countedDurationMs != null) {
+    return countedDurationMs
+  }
+
+  if (hasExplicitPauseCue(content)) return 1500
+  if (hasDiscreteActCue(content)) return 1500
+  if (hasBoundedRepeatedCue(content)) return 4500
+  if (/(long|linger|lingering|lasting|prolonged)\b/.test(normalized)) return 6500
+  if (/(continue|keeps|keeping|still|ongoing|buried|inside|flush against|to the hilt|don['’]t stop)\b/.test(normalized)) return 12000
+  return 12000
 }
 
-function detectDurationClass(content: string): SemanticBeat['durationClass'] {
+function detectDurationClass(content: string, actionTypeOverride?: ActionType | null): SemanticBeat['durationClass'] {
   const normalized = content.toLowerCase()
 
-  if (/(one |single |once)\b/.test(normalized)) return 'instant'
-  if (/(brief|briefly|quick)\b/.test(normalized)) return 'very_short'
+  if (hasExplicitPauseCue(content)) return 'very_short'
+  if (hasDiscreteActCue(content)) return /\b(single|once|one)\b/.test(normalized) ? 'instant' : 'very_short'
+  if (parseExplicitDurationSeconds(content) != null) {
+    return resolveDurationClassFromMs(parseExplicitDurationSeconds(content)! * 1000)
+  }
+  if (parseExplicitCountHint(content) != null) {
+    const durationMs = resolveDurationMsFromCount(
+      actionTypeOverride ?? detectActionType(content),
+      parseExplicitCountHint(content),
+      content,
+    )
+    return resolveDurationClassFromMs(durationMs ?? 4500)
+  }
+  if (hasBoundedRepeatedCue(content)) return 'medium'
   if (/(long|linger|lingering|lasting|prolonged)\b/.test(normalized)) return 'long'
-  if (/(continue|keeps|keeping|still|ongoing)\b/.test(normalized)) return 'ongoing'
-  return 'medium'
+  if (/(continue|keeps|keeping|still|ongoing|buried|inside|flush against|to the hilt|don['’]t stop)\b/.test(normalized)) return 'ongoing'
+  return 'ongoing'
 }
 
 function detectPersistence(
@@ -941,12 +1244,16 @@ function detectPersistence(
   const normalized = content.toLowerCase()
 
   if (/(pulls away|stops|withdraws|lets go|breaks contact)\b/.test(normalized)) return 'stop'
-  if (/(one |single |once)\b/.test(normalized)) return 'instant'
-  if (/(continue|keeps|keeping|still|ongoing)\b/.test(normalized)) return 'ongoing'
+  if (hasExplicitPauseCue(content)) return 'brief'
+  if (hasDiscreteActCue(content)) return 'instant'
+  if (parseExplicitDurationSeconds(content) != null || parseExplicitCountHint(content) != null || hasBoundedRepeatedCue(content)) {
+    return 'brief'
+  }
+  if (/(continue|keeps|keeping|still|ongoing|buried|inside|flush against|to the hilt|don['’]t stop|works|working|lingers|latching|stays on)\b/.test(normalized)) return 'ongoing'
   const effectiveMode = playbackModeOverride ?? preset.repeatStyle
   if (effectiveMode === 'hold') return 'sustained'
   if (effectiveMode === 'loop') return 'ongoing'
-  return 'brief'
+  return 'ongoing'
 }
 
 function applyParticipantStateCue(
@@ -1060,6 +1367,31 @@ function inferUserLikelySide(content: string): 'actor' | 'actee' {
   return 'actee'
 }
 
+function inferTrackedParticipantLikelySide(content: string, trackedReferences: string[]): 'actor' | 'actee' {
+  const normalized = content.toLowerCase()
+
+  for (const reference of trackedReferences) {
+    const escaped = escapeRegExp(reference.toLowerCase())
+
+    if (
+      new RegExp(
+        `\\b${escaped}\\b[^.!?]{0,28}\\b(thrust|stroke|grind|lick|suck|ride|press|fuck|tease|rub|kiss|slide|swallow|take)\\b`,
+        'i',
+      ).test(normalized)
+    ) {
+      return 'actor'
+    }
+
+    if (
+      new RegExp(`\\b(into|against|on|over|beneath|inside|toward)\\s+${escaped}\\b`, 'i').test(normalized)
+    ) {
+      return 'actee'
+    }
+  }
+
+  return inferUserLikelySide(content)
+}
+
 function buildCustomZonePattern(customZone: string): RegExp {
   const terms = customZone
     .split(',')
@@ -1084,7 +1416,7 @@ function getUserZoneTerms(zone: UserContactZone, customZone: string): RegExp {
       return buildCustomZonePattern(customZone)
     case 'genitals':
     default:
-      return /\b(cock|dick|clit|clitoris|pussy|cunt|vagina|penis|shaft|tip|entrance)\b/
+      return /\b(cock|dick|clit|clitoris|pussy|cunt|vagina|penis|shaft|tip|entrance|length|underside|ridge)\b/
   }
 }
 
@@ -1108,13 +1440,24 @@ function containsUserOwnedZoneReference(
 
   for (const match of normalized.matchAll(zonePattern)) {
     const matchIndex = match.index ?? 0
-    const start = Math.max(0, matchIndex - 24)
+    const start = Math.max(0, matchIndex - 40)
     const end = Math.min(normalized.length, matchIndex + match[0].length + 24)
     const localWindow = normalized.slice(start, end)
+    const zoneOffset = matchIndex - start
 
     const hasPossessiveReference = possessiveReferences.some((reference) => {
       const escaped = escapeRegExp(reference.toLowerCase())
-      return new RegExp(`\\b${escaped}\\b`, 'i').test(localWindow)
+      const ownedZonePattern = new RegExp(`\\b${escaped}\\b(?:\\s+\\w+){0,2}\\s+\\b${escapeRegExp(match[0].toLowerCase())}\\b`, 'i')
+      if (ownedZonePattern.test(localWindow)) {
+        return true
+      }
+
+      if (zone === 'genitals' || zone === 'custom') {
+        return new RegExp(`\\b${escaped}\\b`, 'i').test(localWindow)
+      }
+
+      const prefixWindow = localWindow.slice(Math.max(0, zoneOffset - 22), Math.min(localWindow.length, zoneOffset + match[0].length))
+      return new RegExp(`\\b${escaped}\\b(?:\\s+\\w+){0,1}\\s+\\b${escapeRegExp(match[0].toLowerCase())}\\b`, 'i').test(prefixWindow)
     })
 
     if (hasPossessiveReference) {
@@ -1157,7 +1500,17 @@ function containsActorGenitalPenetration(
     return false
   }
 
-  return /\b(press(?:es|ing)?|push(?:es|ing)?|slide(?:s|ing)?|thrust(?:s|ing)?|sink(?:s|ing)?|bury|buries|enter(?:s|ing)?|penetrat(?:e|es|ing)|fuck(?:s|ing)?)\b[^.!?]{0,36}\b(into|inside|in)\b[^.!?]{0,24}\b(her|him|them|body|hole|pussy|cunt|ass|anus|mouth|throat)\b/i.test(normalized)
+  return (
+    /\b(press(?:es|ing)?|push(?:es|ing)?|slide(?:s|ing)?|thrust(?:s|ing)?|sink(?:s|ing)?|bury|buries|enter(?:s|ing)?|penetrat(?:e|es|ing)|fuck(?:s|ing)?)\b[^.!?]{0,36}\b(into|inside|in)\b[^.!?]{0,24}\b(her|him|them|body|hole|pussy|cunt|ass|anus|mouth|throat)\b/i.test(
+      normalized,
+    ) ||
+    /\b(your\s+(cock|dick|penis|shaft)|cock|dick|penis|shaft)\b[^.!?]{0,50}\b(parts?|push(?:es|ing)?|press(?:es|ing)?|slides?|sliding|sinks?|sinking|buries?|enter(?:s|ing)?|disappears?|fill(?:s|ing)?|seat(?:s|ed|ing)?)\b/i.test(
+      normalized,
+    ) ||
+    /\b(to the hilt|sink deeper|shaft disappears into|slides past|past the ring of|seated inside her|seated inside him|seated deep inside)\b/i.test(
+      normalized,
+    )
+  )
 }
 
 function containsPenetrationIntoOwnedZone(
@@ -1165,6 +1518,7 @@ function containsPenetrationIntoOwnedZone(
   zone: UserContactZone,
   customZone: string,
   possessiveReferences: string[],
+  trackedReferences: string[] = [],
 ): boolean {
   const normalized = text.toLowerCase()
   const zoneTerms = getUserZoneTerms(zone, customZone)
@@ -1174,6 +1528,28 @@ function containsPenetrationIntoOwnedZone(
 
   if (!penetrationPattern.test(normalized)) {
     return false
+  }
+
+  for (const reference of trackedReferences) {
+    const escapedReference = escapeRegExp(reference.toLowerCase())
+
+    if (
+      new RegExp(
+        `\\b(press(?:es|ing)?|push(?:es|ing)?|slide(?:s|ing)?|thrust(?:s|ing)?|sink(?:s|ing)?|bury|buries|enter(?:s|ing)?|penetrat(?:e|es|ing)|fuck(?:s|ing)?|fill(?:s|ing)?|stretch(?:es|ing)?)\\b[^.!?]{0,40}\\b(into|inside|in)\\b[^.!?]{0,24}\\b${escapedReference}\\b`,
+        'i',
+      ).test(normalized)
+    ) {
+      return true
+    }
+
+    if (
+      new RegExp(
+        `\\b${escapedReference}(?:'s)?\\b[^.!?]{0,36}\\b(heat|entrance|folds|walls|rim|depths?|hole|body|inside|slick\\s+heat|wet\\s+heat)\\b`,
+        'i',
+      ).test(normalized)
+    ) {
+      return true
+    }
   }
 
   for (const match of normalized.matchAll(zonePattern)) {
@@ -1222,7 +1598,13 @@ function collectZoneScopedWindows(
     if (
       hasUserReference &&
       (hasOwnedZoneReference ||
-        containsPenetrationIntoOwnedZone(windowText, zone, customZone, possessiveReferences ?? []) ||
+        containsPenetrationIntoOwnedZone(
+          windowText,
+          zone,
+          customZone,
+          possessiveReferences ?? [],
+          userReferences ?? [],
+        ) ||
         containsActorGenitalPenetration(windowText, zone, userReferences ?? []))
     ) {
       windows.push(windowText)
@@ -1254,6 +1636,27 @@ function rankZoneScopedActionHints(
 
   const addScore = (actionType: ActionType, amount: number) => {
     scores.set(actionType, (scores.get(actionType) ?? 0) + amount)
+  }
+
+  const trackedSide = inferTrackedParticipantLikelySide(content, userReferences ?? [])
+  const hasActorPenetration = containsActorGenitalPenetration(content, zone, userReferences ?? [])
+  const hasTrackedZonePenetration = containsPenetrationIntoOwnedZone(
+    content,
+    zone,
+    customZone,
+    possessiveReferences ?? [],
+    userReferences ?? [],
+  )
+
+  if (hasActorPenetration || hasTrackedZonePenetration) {
+    addScore('thrust', 12)
+  }
+
+  if (trackedSide === 'actee' && hasTrackedZonePenetration) {
+    addScore('thrust', 10)
+    addScore('suction', -9)
+    addScore('lick', -7)
+    addScore('stroke', -4)
   }
 
   for (const windowText of windows) {
@@ -1288,7 +1691,13 @@ function rankZoneScopedActionHints(
     if (/\b(thrust|thrusting|slide|sliding)\b/i.test(windowText)) addScore('thrust', 3)
     if (
       containsActorGenitalPenetration(windowText, zone, userReferences ?? []) ||
-      containsPenetrationIntoOwnedZone(windowText, zone, customZone, possessiveReferences ?? [])
+      containsPenetrationIntoOwnedZone(
+        windowText,
+        zone,
+        customZone,
+        possessiveReferences ?? [],
+        userReferences ?? [],
+      )
     ) {
       addScore('thrust', 7)
     }
@@ -1317,44 +1726,200 @@ function extractZoneScopedActionHints(
   )
 }
 
+function hasEroticActionCue(text: string): boolean {
+  return /\b(stroke|strokes|thrust|thrusts|grind|grinds|lick|licks|suck|sucks|suction|ride|rides|press|presses|fuck|fucks|tease|teases|rub|rubs|kiss|kisses|slide|slides|sink|sinks|fill|fills|mouth|tongue|lips|throat|inside|into|buried|clench|pulse|swallow|swallows|cleaning|taste|tasting)\b/i.test(
+    text,
+  )
+}
+
+type ZoneRelevantClause = {
+  clause: string
+  sentence: string
+}
+
 function splitZoneRelevantClauses(
   content: string,
   zone: UserContactZone,
   customZone: string,
   userReferences: string[],
   possessiveReferences: string[],
-): string[] {
-  const clauses = content
-    .split(/(?<=[.!?])\s+|,\s+|(?<=\s)\bas\b\s+|(?<=\s)\bwhile\b\s+|(?<=\s)\bat the same time\b/i)
-    .map((clause) => clause.trim())
+): ZoneRelevantClause[] {
+  const zoneTerms = getUserZoneTerms(zone, customZone)
+  const sentences = content
+    .split(/(?<=[.!?])\s+/)
+    .map((sentence) => sentence.trim())
     .filter(Boolean)
 
-  const zoneTerms = getUserZoneTerms(zone, customZone)
-  return clauses.filter(
-    (clause) =>
-      containsAnyReference(clause, userReferences) &&
-      ((zoneTerms.test(clause.toLowerCase()) &&
-        (containsUserOwnedZoneReference(clause, zone, customZone, possessiveReferences) ||
-          containsPenetrationIntoOwnedZone(clause, zone, customZone, possessiveReferences))) ||
-        containsActorGenitalPenetration(clause, zone, userReferences)),
-  )
+  const acceptedClauses: ZoneRelevantClause[] = []
+
+  for (const sentence of sentences) {
+    const sentenceLower = sentence.toLowerCase()
+    const sentenceRelevant =
+      containsAnyReference(sentence, userReferences) &&
+      ((zoneTerms.test(sentenceLower) &&
+        (containsUserOwnedZoneReference(sentence, zone, customZone, possessiveReferences) ||
+          containsPenetrationIntoOwnedZone(
+            sentence,
+            zone,
+            customZone,
+            possessiveReferences,
+            userReferences,
+          ))) ||
+        containsActorGenitalPenetration(sentence, zone, userReferences))
+
+    if (!sentenceRelevant) {
+      continue
+    }
+
+    const clauses = sentence
+      .split(
+        /,\s+|;\s+|\s+[—–-]\s+|(?<=\s)\bas\b\s+|(?<=\s)\bwhile\b\s+|(?<=\s)\bat the same time\b|(?<=\s)\bthen\b\s+/i,
+      )
+      .map((clause) => clause.trim())
+      .filter(Boolean)
+
+    for (const clause of clauses) {
+      if (!hasEroticActionCue(clause) && !hasExplicitPauseCue(clause)) {
+        continue
+      }
+
+      const clauseRelevant =
+        containsAnyReference(clause, userReferences) ||
+        zoneTerms.test(clause.toLowerCase()) ||
+        containsActorGenitalPenetration(clause, zone, userReferences) ||
+        containsPenetrationIntoOwnedZone(
+          clause,
+          zone,
+          customZone,
+          possessiveReferences,
+          userReferences,
+        )
+
+      if (clauseRelevant || sentenceRelevant) {
+        acceptedClauses.push({ clause, sentence })
+      }
+    }
+  }
+
+  return acceptedClauses
 }
 
-function inferActionTypeFromClause(
+function buildClauseActionCueMap(clause: string): Map<ActionType, number> {
+  const normalized = clause.toLowerCase()
+  const cues = new Map<ActionType, number>()
+  const addCue = (actionType: ActionType, amount: number) => {
+    cues.set(actionType, Math.max(cues.get(actionType) ?? 0, amount))
+  }
+
+  if (
+    /\b(stroke|strokes|deep thrust|deep thrusts|thrust|thrusts|pistons?|bottom(?:ing)? out|fill(?:s|ing)? her again|sink(?:s|ing)? back|inside me|inside her|inside him|inside them|to the hilt|buried)\b/i.test(
+      normalized,
+    )
+  ) {
+    addCue('thrust', 5)
+  }
+  if (
+    /\b(suck|sucks|suction|mouth|tongue|lips|throat|swallow|swallows|cleaning|taste|tasting)\b/i.test(
+      normalized,
+    )
+  ) {
+    addCue('suction', 5)
+  }
+  if (/\b(lick|licks|tongue tracing|tongue sweeping|tongue darting|tracing)\b/i.test(normalized)) {
+    addCue('lick', 4)
+  }
+  if (/\b(stroke|stroking|hand|hands|fingers|grip|wrapped)\b/i.test(normalized)) {
+    addCue('stroke', 4)
+  }
+  if (/\b(grind|grinds|grinding|circle|circular|rolling)\b/i.test(normalized)) {
+    addCue('grind', 3)
+  }
+  if (/\b(tease|teases|teasing)\b/i.test(normalized)) {
+    addCue('tease', 2)
+  }
+  if (/\b(squeeze|squeezes|squeezing|clench|clenching)\b/i.test(normalized)) {
+    addCue('squeeze', 2)
+  }
+  if (/\b(pulse|pulses|pulsing|throb|throbbing)\b/i.test(normalized)) {
+    addCue('pulse', 2)
+  }
+
+  return cues
+}
+
+function inferActionTypesFromClause(
   clause: string,
+  sentence: string,
   zone: UserContactZone,
   customZone: string,
   userReferences: string[],
   possessiveReferences: string[],
-): ActionType | null {
-  const ranked = rankZoneScopedActionHints(
+): ActionType[] {
+  if (hasExplicitPauseCue(clause)) {
+    return ['pause']
+  }
+
+  const clauseRanked = rankZoneScopedActionHints(
     clause,
     zone,
     customZone,
     userReferences,
     possessiveReferences,
   )
-  return ranked[0]?.actionType ?? null
+  const cueMap = buildClauseActionCueMap(clause)
+  const hintedFromClause = clauseRanked.filter((entry) => entry.score >= 3)
+  if (hintedFromClause.length > 0) {
+    const topScore = hintedFromClause[0]?.score ?? 0
+    return dedupeActionTypes(
+      hintedFromClause
+        .filter(
+          (entry) =>
+            entry.score >= Math.max(3, topScore - 2) &&
+            (cueMap.has(entry.actionType) || entry.actionType === hintedFromClause[0]?.actionType),
+        )
+        .map((entry) => entry.actionType),
+    )
+  }
+
+  const sentenceRanked = rankZoneScopedActionHints(
+    sentence,
+    zone,
+    customZone,
+    userReferences,
+    possessiveReferences,
+  )
+  const inheritedActionTypes = sentenceRanked
+    .filter((entry) => cueMap.has(entry.actionType))
+    .sort((left, right) => (cueMap.get(right.actionType) ?? 0) - (cueMap.get(left.actionType) ?? 0))
+    .map((entry) => entry.actionType)
+
+  if (inheritedActionTypes.length > 0) {
+    return dedupeActionTypes(inheritedActionTypes)
+  }
+
+  const fallbackCueTypes = [...cueMap.entries()]
+    .sort((left, right) => right[1] - left[1])
+    .filter(([, score]) => score >= 4)
+    .map(([actionType]) => actionType)
+
+  if (fallbackCueTypes.length > 0) {
+    return dedupeActionTypes(fallbackCueTypes)
+  }
+
+  if (
+    containsActorGenitalPenetration(clause, zone, userReferences) ||
+    containsPenetrationIntoOwnedZone(
+      clause,
+      zone,
+      customZone,
+      possessiveReferences,
+      userReferences,
+    )
+  ) {
+    return ['thrust']
+  }
+
+  return cueMap.has('pause') ? ['pause'] : []
 }
 
 function buildDeterministicZoneScopedBeats(
@@ -1374,55 +1939,91 @@ function buildDeterministicZoneScopedBeats(
   )
   const beats: LlmParserBeatPayload[] = []
 
-  for (const clause of clauses) {
-    const actionType = inferActionTypeFromClause(
-      clause,
+  for (const entry of clauses) {
+    const actionTypes = inferActionTypesFromClause(
+      entry.clause,
+      entry.sentence,
       zone,
       customZone,
       userReferences,
       possessiveReferences,
     )
-    if (!actionType) continue
+    if (actionTypes.length === 0) continue
 
-    const normalized = clause.toLowerCase()
-    const explicitDurationSeconds = parseExplicitDurationSeconds(clause)
-    const explicitCount = parseExplicitCountHint(clause)
-    const countHint = resolveCountHintFromCount(explicitCount)
-    const countedDurationMs = resolveDurationMsFromCount(actionType, explicitCount, clause)
-    const fallbackDurationMs = /\b(single|single smooth motion|just long enough)\b/i.test(normalized)
-      ? 1200
-      : /\b(again|holds herself there|working|works)\b/i.test(normalized)
-        ? 4000
-        : 2500
-    const durationMs =
-      explicitDurationSeconds != null
-        ? explicitDurationSeconds * 1000
-        : countedDurationMs ?? fallbackDurationMs
-    const durationClass = resolveDurationClassFromMs(durationMs)
+    for (const actionType of actionTypes) {
+      const normalized = entry.clause.toLowerCase()
+      const durationProfile = inferDeterministicDurationProfile(actionType, entry.clause)
+      const responseMode = inferDeterministicResponseMode(entry.clause, content)
+      const inferredWeights = inferDeterministicBeatWeights(responseMode)
 
-    beats.push({
-      order_index: beats.length,
-      source_excerpt: clause,
-      action_type: actionType,
-      strength: /\b(deep|takes him deep|throat|rigid|hard)\b/i.test(normalized) ? 70 : 55,
-      frequency: /\b(slow|deliberate|holds|holding)\b/i.test(normalized) ? 35 : 50,
-      duration_class: durationClass,
-      duration_ms: durationMs,
-      transition_style: /\b(slow|deliberate|lowers herself)\b/i.test(normalized) ? 'ramp' : 'steady',
-      count_hint:
-        countHint !== 'unknown'
-          ? countHint
-          : /\b(again|working|works|holds herself there)\b/i.test(normalized)
-            ? 'repeated'
-            : 'one_shot',
-      persistence: /\b(holds herself there|working|works)\b/i.test(normalized) ? 'sustained' : 'brief',
-      response_mode: 'lead',
-      explicit_change: /\b(again|at the same time|while)\b/i.test(normalized),
-      explicit_stop: false,
-      actor_weight: 0.5,
-      actee_weight: 0.5,
-      fallback_behavior: 'resume_previous',
-    })
+      beats.push({
+        order_index: beats.length,
+        source_excerpt: entry.clause,
+        action_type: actionType,
+        strength: /\b(deep|takes him deep|throat|rigid|hard)\b/i.test(normalized) ? 70 : 55,
+        frequency: /\b(slow|deliberate|holds|holding)\b/i.test(normalized) ? 35 : 50,
+        duration_class: durationProfile.durationClass,
+        duration_ms: durationProfile.durationMs,
+        transition_style: /\b(slow|deliberate|lowers herself)\b/i.test(normalized) ? 'ramp' : 'steady',
+        count_hint: durationProfile.countHint,
+        persistence: durationProfile.persistence,
+        response_mode: responseMode,
+        explicit_change: /\b(again|at the same time|while|then)\b/i.test(normalized),
+        explicit_stop: false,
+        actor_weight: inferredWeights.actorWeight,
+        actee_weight: inferredWeights.acteeWeight,
+        fallback_behavior: durationProfile.fallbackBehavior,
+      })
+    }
+  }
+
+  const sceneHasPenetration =
+    containsActorGenitalPenetration(content, zone, userReferences) ||
+    containsPenetrationIntoOwnedZone(
+      content,
+      zone,
+      customZone,
+      possessiveReferences,
+      userReferences,
+    )
+
+  if (sceneHasPenetration && !beats.some((beat) => beat.action_type === 'thrust')) {
+    const penetrationEntry =
+      clauses.find(({ clause }) =>
+        /\b(stroke|strokes|thrust|thrusts|deep thrust|deep thrusts|pistons?|into\s+\w+|back to\s+\w+|fill(?:s|ing)?\s+\w+|sink(?:s|ing)?\s+back|bottom(?:ing)? out|to the hilt|buried|inside me|inside her|inside him|inside them)\b/i.test(
+          clause,
+        ),
+      ) ?? clauses[0]
+
+    if (penetrationEntry) {
+      const normalized = penetrationEntry.clause.toLowerCase()
+      const durationProfile = inferDeterministicDurationProfile('thrust', penetrationEntry.clause)
+      const responseMode = inferDeterministicResponseMode(penetrationEntry.clause, content)
+      const inferredWeights = inferDeterministicBeatWeights(responseMode)
+
+      beats.unshift({
+        order_index: 0,
+        source_excerpt: penetrationEntry.clause,
+        action_type: 'thrust',
+        strength: /\b(deep|rigid|hard|bottom(?:ing)? out|to the hilt)\b/i.test(normalized) ? 70 : 55,
+        frequency: /\b(slow|deliberate|holds|holding)\b/i.test(normalized) ? 35 : 50,
+        duration_class: durationProfile.durationClass,
+        duration_ms: durationProfile.durationMs,
+        transition_style: /\b(slow|deliberate)\b/i.test(normalized) ? 'ramp' : 'steady',
+        count_hint: durationProfile.countHint,
+        persistence: durationProfile.persistence,
+        response_mode: responseMode,
+        explicit_change: /\b(again|at the same time|while|then|back)\b/i.test(normalized),
+        explicit_stop: false,
+        actor_weight: inferredWeights.actorWeight,
+        actee_weight: inferredWeights.acteeWeight,
+        fallback_behavior: durationProfile.fallbackBehavior,
+      })
+
+      beats.forEach((beat, index) => {
+        beat.order_index = index
+      })
+    }
   }
 
   return beats
@@ -1534,7 +2135,13 @@ function includesUserPrimaryContactZone(
   }
 
   if (
-    containsPenetrationIntoOwnedZone(normalized, zone, customZone, possessiveReferences) ||
+    containsPenetrationIntoOwnedZone(
+      normalized,
+      zone,
+      customZone,
+      possessiveReferences,
+      userReferences,
+    ) ||
     containsActorGenitalPenetration(normalized, zone, userReferences)
   ) {
     return true
@@ -1590,18 +2197,19 @@ function buildParticipantStateAssignments(
   messageId: string,
   content: string,
   participantProfiles: ParticipantProfileBundle,
+  chatPreferences: ChatTrackingPreferences,
   primaryUserContactZone: UserContactZone,
   customUserContactZone: string,
 ): ParticipantStateAssignment[] {
-  const userReferences = buildUserReferenceHints(participantProfiles)
-  const possessiveReferences = buildUserPossessiveReferenceHints(participantProfiles)
+  const trackedReferences = buildTrackedReferenceHints(participantProfiles, chatPreferences)
+  const possessiveReferences = buildTrackedPossessiveReferenceHints(participantProfiles, chatPreferences)
   if (
     !includesUserPrimaryContactZone(
       content,
       primaryUserContactZone,
       customUserContactZone,
       possessiveReferences,
-      userReferences,
+      trackedReferences,
     )
   ) {
     return []
@@ -1611,12 +2219,18 @@ function buildParticipantStateAssignments(
   const acteeTemplate = detectParticipantState(content, messageId, 'actee')
   const assignments: ParticipantStateAssignment[] = []
 
-  const userProfile = participantProfiles.userProfile
-  const userSide = inferUserLikelySide(content)
+  const trackedProfile = resolveTrackedParticipantProfile(participantProfiles, chatPreferences)
+  const trackedSide = inferTrackedParticipantLikelySide(content, trackedReferences)
+  const includeUserCounterparty =
+    trackedProfile?.participantKind === 'character' &&
+    participantProfiles.userProfile != null &&
+    /\b(you|your|yours|yourself)\b/i.test(content)
   const characterProfiles = findContactLinkedCharacterProfiles(
     content,
-    participantProfiles.characterProfiles,
-    userSide,
+    participantProfiles.characterProfiles.filter(
+      (profile) => profile.participantId !== trackedProfile?.participantId,
+    ),
+    trackedSide,
   )
 
   const actorParticipants: Array<{
@@ -1633,18 +2247,33 @@ function buildParticipantStateAssignments(
     isUserPersona: boolean
   }> = []
 
-  if (userProfile) {
+  if (trackedProfile) {
     const participant = {
-      participantId: userProfile.participantId,
-      participantKind: userProfile.participantKind,
-      displayName: userProfile.displayName,
-      isUserPersona: true,
+      participantId: trackedProfile.participantId,
+      participantKind: trackedProfile.participantKind,
+      displayName: trackedProfile.displayName,
+      isUserPersona: trackedProfile.participantKind === 'persona',
     }
 
-    if (userSide === 'actor') {
+    if (trackedSide === 'actor') {
       actorParticipants.push(participant)
     } else {
       acteeParticipants.push(participant)
+    }
+  }
+
+  if (includeUserCounterparty && participantProfiles.userProfile) {
+    const participant = {
+      participantId: participantProfiles.userProfile.participantId,
+      participantKind: participantProfiles.userProfile.participantKind,
+      displayName: participantProfiles.userProfile.displayName,
+      isUserPersona: true,
+    }
+
+    if (trackedSide === 'actor') {
+      acteeParticipants.push(participant)
+    } else {
+      actorParticipants.push(participant)
     }
   }
 
@@ -1656,8 +2285,8 @@ function buildParticipantStateAssignments(
       isUserPersona: false,
     }
 
-    if (userProfile) {
-      if (userSide === 'actor') {
+    if (trackedProfile) {
+      if (trackedSide === 'actor') {
         acteeParticipants.push(participant)
       } else {
         actorParticipants.push(participant)
@@ -1667,7 +2296,7 @@ function buildParticipantStateAssignments(
     }
   }
 
-  if (!userProfile && actorParticipants.length === 0 && acteeParticipants.length === 0) {
+  if (!trackedProfile && actorParticipants.length === 0 && acteeParticipants.length === 0) {
     actorParticipants.push({
       participantId: null,
       participantKind: null,
@@ -1753,7 +2382,13 @@ function detectRelevantUserZoneContact(
     (zoneTerms.test(normalized) &&
       contactTerms.test(normalized) &&
       containsUserOwnedZoneReference(normalized, zone, customZone, possessiveReferences)) ||
-    containsPenetrationIntoOwnedZone(normalized, zone, customZone, possessiveReferences) ||
+    containsPenetrationIntoOwnedZone(
+      normalized,
+      zone,
+      customZone,
+      possessiveReferences,
+      userReferences,
+    ) ||
     containsActorGenitalPenetration(normalized, zone, userReferences)
   )
 }
@@ -1795,6 +2430,7 @@ async function buildMessagePlan(
   playbackModeOverride: PlaybackMode | null,
 ): Promise<MessagePlan> {
   const participantProfiles = await getParticipantProfilesSafely(userId, chatId, characterId)
+  const chatPreferences = await readChatTrackingPreferences(spindle, userId, chatId, settings)
   const messages = await spindle.chat.getMessages(chatId)
   const selectedIndex = messages.findIndex((message) => message.id === messageId)
   const selected = selectedIndex >= 0 ? messages[selectedIndex] : undefined
@@ -1807,7 +2443,41 @@ async function buildMessagePlan(
     throw new Error('Only assistant messages can be played')
   }
 
-  const actionType = detectActionType(selected.content)
+  const recentContext = messages
+    .slice(Math.max(0, selectedIndex - 3), selectedIndex)
+    .filter((message) => message.role === 'assistant' || message.role === 'user')
+    .map((message) => ({
+      role: message.role as 'assistant' | 'user',
+      content: message.content,
+    }))
+  const trackedReferenceHints = buildTrackedReferenceHints(participantProfiles, chatPreferences)
+  const trackedPossessiveReferenceHints = buildTrackedPossessiveReferenceHints(
+    participantProfiles,
+    chatPreferences,
+  )
+  const hasUserOwnedZoneContact = includesUserPrimaryContactZone(
+    selected.content,
+    chatPreferences.primaryContactZone,
+    chatPreferences.customContactZone,
+    trackedPossessiveReferenceHints,
+    trackedReferenceHints,
+  )
+  const deterministicZoneBeats = buildDeterministicZoneScopedBeats(
+    selected.content,
+    messageId,
+    chatPreferences.primaryContactZone,
+    chatPreferences.customContactZone,
+    trackedReferenceHints,
+    trackedPossessiveReferenceHints,
+  )
+  const rankedTrackedHints = rankZoneScopedActionHints(
+    selected.content,
+    chatPreferences.primaryContactZone,
+    chatPreferences.customContactZone,
+    trackedReferenceHints,
+    trackedPossessiveReferenceHints,
+  )
+  const actionType = rankedTrackedHints[0]?.actionType ?? detectActionType(selected.content)
   const preset =
     settings.actionCalibrationPresets.find((entry) => entry.semanticActionType === actionType) ??
     settings.actionCalibrationPresets[0]
@@ -1819,46 +2489,22 @@ async function buildMessagePlan(
   const mapping =
     settings.xtoysActionMappings.find((entry) => entry.semanticActionType === actionType) ?? null
 
-  const recentContext = messages
-    .slice(Math.max(0, selectedIndex - 3), selectedIndex)
-    .filter((message) => message.role === 'assistant' || message.role === 'user')
-    .map((message) => ({
-      role: message.role as 'assistant' | 'user',
-      content: message.content,
-    }))
-  const userReferenceHints = buildUserReferenceHints(participantProfiles)
-  const userPossessiveReferenceHints = buildUserPossessiveReferenceHints(participantProfiles)
-  const hasUserOwnedZoneContact = includesUserPrimaryContactZone(
-    selected.content,
-    settings.parser.primaryUserContactZone,
-    settings.parser.customUserContactZone,
-    userPossessiveReferenceHints,
-    userReferenceHints,
-  )
-  const deterministicZoneBeats = buildDeterministicZoneScopedBeats(
-    selected.content,
-    messageId,
-    settings.parser.primaryUserContactZone,
-    settings.parser.customUserContactZone,
-    userReferenceHints,
-    userPossessiveReferenceHints,
-  )
-
   let parsedScene: LlmParserScenePayload | null = null
   try {
     parsedScene = repairParsedSceneToZoneScopedActions(
       await runStructuredSceneParser(
         userId,
         settings,
+        chatPreferences,
         selected.content,
         recentContext,
         participantProfiles,
       ),
       selected.content,
-      settings.parser.primaryUserContactZone,
-      settings.parser.customUserContactZone,
-      userReferenceHints,
-      userPossessiveReferenceHints,
+      chatPreferences.primaryContactZone,
+      chatPreferences.customContactZone,
+      trackedReferenceHints,
+      trackedPossessiveReferenceHints,
     )
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
@@ -1908,6 +2554,9 @@ async function buildMessagePlan(
       : deterministicZoneBeats.length > 0
         ? 'deterministic_zone_fallback'
         : 'heuristic_fallback'
+
+  const allowGenericHeuristicFallback =
+    chatPreferences.primaryContactZone === 'genitals' || deterministicZoneBeats.length > 0
 
   const semanticBeats: SemanticBeat[] =
     parsedScene?.relevant && sortedLlmBeats.length > 0
@@ -1974,7 +2623,8 @@ async function buildMessagePlan(
               fallbackBehavior: normalizeFallbackBehavior(beat.fallback_behavior),
             }
           })
-      : [
+      : allowGenericHeuristicFallback
+        ? [
           {
             messageId,
             orderIndex: 0,
@@ -1982,8 +2632,8 @@ async function buildMessagePlan(
             actionType: resolvedActionType,
             strength: detectStrength(selected.content, resolvedPreset),
             frequency: detectTempo(selected.content, resolvedPreset),
-            durationClass: detectDurationClass(selected.content),
-            durationMs: detectDurationMs(selected.content),
+            durationClass: detectDurationClass(selected.content, resolvedActionType),
+            durationMs: detectDurationMs(selected.content, resolvedActionType),
             transitionStyle: 'unknown',
             countHint: 'unknown',
             persistence: detectPersistence(selected.content, resolvedPreset, playbackModeOverride),
@@ -1995,6 +2645,7 @@ async function buildMessagePlan(
             fallbackBehavior: 'unknown',
           },
         ]
+        : []
 
   const resolvedBeats: ResolvedBeat[] = semanticBeats.map((semanticBeat) => {
     const beatPreset =
@@ -2003,6 +2654,7 @@ async function buildMessagePlan(
     const beatMapping =
       settings.xtoysActionMappings.find((entry) => entry.semanticActionType === semanticBeat.actionType) ??
       resolvedMapping
+    const responseFactors = resolveCombinedResponseFactors(semanticBeat)
 
     return {
       messageId,
@@ -2012,8 +2664,8 @@ async function buildMessagePlan(
       xtoysActionName:
         beatMapping?.xtoysActionName || beatMapping?.fallbackActionName || semanticBeat.actionType,
       executionProfile: beatPreset.preferredExecutionProfile,
-      amplitude: semanticBeat.strength,
-      tempo: semanticBeat.frequency,
+      amplitude: clamp(Math.round(semanticBeat.strength * responseFactors.amplitudeFactor), 0, 100),
+      tempo: clamp(Math.round(semanticBeat.frequency * responseFactors.tempoFactor), 0, 100),
       durationMs: semanticBeat.durationMs,
       transitionStyle: semanticBeat.transitionStyle,
       countHint: semanticBeat.countHint,
@@ -2037,15 +2689,17 @@ async function buildMessagePlan(
           messageId,
           selected.content,
           participantProfiles,
-          settings.parser.primaryUserContactZone,
-          settings.parser.customUserContactZone,
+          chatPreferences,
+          chatPreferences.primaryContactZone,
+          chatPreferences.customContactZone,
         )
       : buildParticipantStateAssignments(
           messageId,
           selected.content,
           participantProfiles,
-          settings.parser.primaryUserContactZone,
-          settings.parser.customUserContactZone,
+          chatPreferences,
+          chatPreferences.primaryContactZone,
+          chatPreferences.customContactZone,
         )
 
     return {
@@ -2261,6 +2915,33 @@ async function handleFrontendMessage(
         )
         return
       }
+      case 'lummate.phase3.set_tracking_preferences': {
+        if (!payload.payload.chatId) {
+          throw new Error('Cannot update tracked participant without an active chat')
+        }
+
+        const settings = await readUserSettings(spindle, userId)
+        await writeChatTrackingPreferences(spindle, userId, payload.payload.chatId, {
+          trackedParticipantId: payload.payload.trackedParticipantId,
+          trackedParticipantKind: payload.payload.trackedParticipantKind,
+          primaryContactZone: settings.parser.primaryUserContactZone,
+          customContactZone: settings.parser.customUserContactZone,
+        }, settings)
+
+        const bootstrap = await buildBootstrap(
+          userId,
+          payload.payload.chatId,
+          payload.payload.characterId,
+        )
+        sendToUser(
+          {
+            type: 'lummate.phase1.session_state',
+            payload: bootstrap,
+          },
+          userId,
+        )
+        return
+      }
       case 'lummate.phase5.regenerate_profile': {
         const participantProfiles = await getParticipantProfilesSafely(
           userId,
@@ -2301,6 +2982,25 @@ async function handleFrontendMessage(
         const nextSettings = buildUpdatedSettings(current, payload.payload.settings)
 
         await writeUserSettings(spindle, userId, nextSettings)
+        if (payload.payload.context.chatId) {
+          const currentChatPreferences = await readChatTrackingPreferences(
+            spindle,
+            userId,
+            payload.payload.context.chatId,
+            nextSettings,
+          )
+          await writeChatTrackingPreferences(
+            spindle,
+            userId,
+            payload.payload.context.chatId,
+            {
+              ...currentChatPreferences,
+              primaryContactZone: nextSettings.parser.primaryUserContactZone,
+              customContactZone: nextSettings.parser.customUserContactZone,
+            },
+            nextSettings,
+          )
+        }
 
         const settingsBootstrap = await buildSettingsBootstrap(
           userId,
@@ -2358,13 +3058,14 @@ spindle.on('GENERATION_ENDED', async (payload, userId) => {
     payload.chatId,
     current.activeCharacterId,
   )
-  const possessiveReferences = buildUserPossessiveReferenceHints(participantProfiles)
+  const chatPreferences = await readChatTrackingPreferences(spindle, userId, payload.chatId, settings)
+  const possessiveReferences = buildTrackedPossessiveReferenceHints(participantProfiles, chatPreferences)
   const verdict = evaluateLaterMessage(
     payload.content,
-    settings.parser.primaryUserContactZone,
-    settings.parser.customUserContactZone,
+    chatPreferences.primaryContactZone,
+    chatPreferences.customContactZone,
     possessiveReferences,
-    buildUserReferenceHints(participantProfiles),
+    buildTrackedReferenceHints(participantProfiles, chatPreferences),
   )
   let nextSession: SessionState = {
     ...current,

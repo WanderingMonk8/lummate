@@ -60,6 +60,9 @@ export interface ParticipantProfile {
   participantKind: ParticipantKind
   participantId: string
   displayName: string
+  aliasHints: string[]
+  sourceCardId: string | null
+  sourceCardName: string | null
   sourceFingerprint: string | null
   sourceUpdatedAt: number | null
   sourcePreview: string
@@ -98,6 +101,13 @@ export interface ParserConnectionSettings {
   customUserContactZone: string
   deactivationThreshold: number
   fallbackBehavior: ParserConnectionFallback
+}
+
+export interface ChatTrackingPreferences {
+  trackedParticipantId: string | null
+  trackedParticipantKind: ParticipantKind
+  primaryContactZone: UserContactZone
+  customContactZone: string
 }
 
 export interface ConnectionProfileSummary {
@@ -226,12 +236,15 @@ export interface SessionState {
 export interface BootstrapPayload {
   settings: UserSettings
   session: SessionState
+  chatPreferences: ChatTrackingPreferences
+  participantProfiles: ParticipantProfileBundle
 }
 
 export interface SettingsBootstrapPayload {
   settings: UserSettings
   availableConnections: ConnectionProfileSummary[]
   participantProfiles: ParticipantProfileBundle
+  chatPreferences: ChatTrackingPreferences
 }
 
 export interface SettingsSavePayload {
@@ -264,6 +277,15 @@ export interface SetPlaybackModePayload {
   playbackMode: PlaybackMode
 }
 
+export interface SetTrackingPreferencesPayload {
+  chatId: string | null
+  characterId: string | null
+  trackedParticipantId: string | null
+  trackedParticipantKind: ParticipantKind
+  primaryContactZone: UserContactZone
+  customContactZone: string
+}
+
 export interface RegenerateParticipantProfilePayload {
   chatId: string | null
   characterId: string | null
@@ -276,6 +298,7 @@ export type FrontendToBackendMessage =
   | { type: 'lummate.phase1.play_toggle'; payload: PlayTogglePayload }
   | { type: 'lummate.phase3.regenerate'; payload: RegeneratePayload }
   | { type: 'lummate.phase3.set_playback_mode'; payload: SetPlaybackModePayload }
+  | { type: 'lummate.phase3.set_tracking_preferences'; payload: SetTrackingPreferencesPayload }
   | { type: 'lummate.phase5.regenerate_profile'; payload: RegenerateParticipantProfilePayload }
   | { type: 'lummate.settings.bootstrap'; payload: ChatScopedPayload }
   | { type: 'lummate.settings.save'; payload: SettingsSavePayload & { context: ChatScopedPayload } }
@@ -309,6 +332,13 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
   },
   xtoysActionMappings: [],
   actionCalibrationPresets: [],
+}
+
+export const DEFAULT_CHAT_TRACKING_PREFERENCES: ChatTrackingPreferences = {
+  trackedParticipantId: null,
+  trackedParticipantKind: 'persona',
+  primaryContactZone: 'genitals',
+  customContactZone: '',
 }
 
 export const ALL_ACTION_TYPES: ActionType[] = [

@@ -7,8 +7,10 @@ import type {
   ActionType,
   BackendToFrontendMessage,
   BootstrapPayload,
+  ChatTrackingPreferences,
   MessagePlan,
   PlaybackMode,
+  ParticipantKind,
   ParticipantProfile,
   ParticipantProfileBundle,
   ParserSessionState,
@@ -169,6 +171,7 @@ export function setup(ctx: SpindleFrontendContext) {
   let parserSessionState: ParserSessionState | null = null
   let settingsPayload: SettingsBootstrapPayload | null = null
   let participantProfiles: ParticipantProfileBundle | null = null
+  let currentChatPreferences: ChatTrackingPreferences | null = null
   let draftSettings: UserSettings | null = null
   let settingsStatus = 'Loading settings...'
   let settingsSaveInFlight = false
@@ -275,7 +278,8 @@ export function setup(ctx: SpindleFrontendContext) {
       gap: 6px;
     }
     .lummate-phase1-breakout-action,
-    .lummate-phase1-mode-button {
+    .lummate-phase1-mode-button,
+    .lummate-phase1-track-button {
       appearance: none;
       border: 1px solid rgba(148, 163, 184, 0.2);
       background: rgba(15, 23, 42, 0.78);
@@ -290,8 +294,14 @@ export function setup(ctx: SpindleFrontendContext) {
       color: #67e8f9;
       border-color: rgba(103, 232, 249, 0.45);
     }
+    .lummate-phase1-track-button[data-active="true"] {
+      background: rgba(8, 47, 73, 0.72);
+      color: #bae6fd;
+      border-color: rgba(125, 211, 252, 0.4);
+    }
     .lummate-phase1-breakout-action:hover,
-    .lummate-phase1-mode-button:hover {
+    .lummate-phase1-mode-button:hover,
+    .lummate-phase1-track-button:hover {
       border-color: rgba(148, 163, 184, 0.38);
     }
     .lummate-phase4-debug {
@@ -491,6 +501,7 @@ export function setup(ctx: SpindleFrontendContext) {
       <div class="lummate-phase5-debug-fingerprint">Fingerprints: -- / --</div>
       <div class="lummate-phase4-debug-title">Phase 6 Current State</div>
       <div class="lummate-phase6-debug-zone">Primary zone: pending</div>
+      <div class="lummate-phase6-debug-settings-zone">Settings zone: pending</div>
       <div class="lummate-phase6-debug-actor">Actor states: pending</div>
       <div class="lummate-phase6-debug-actee">Actee states: pending</div>
       <div class="lummate-phase4-debug-title">Phase 7 Parsed Actions</div>
@@ -778,6 +789,55 @@ export function setup(ctx: SpindleFrontendContext) {
     }
   }
 
+  function getTrackableParticipants(): Array<{
+    participantId: string | null
+    participantKind: ParticipantKind
+    label: string
+  }> {
+    const options: Array<{ participantId: string | null; participantKind: ParticipantKind; label: string }> = []
+
+    if (participantProfiles?.userProfile) {
+      options.push({
+        participantId: participantProfiles.userProfile.participantId,
+        participantKind: 'persona',
+        label: participantProfiles.userProfile.displayName,
+      })
+    } else {
+      options.push({
+        participantId: null,
+        participantKind: 'persona',
+        label: 'User',
+      })
+    }
+
+    for (const profile of participantProfiles?.characterProfiles ?? []) {
+      options.push({
+        participantId: profile.participantId,
+        participantKind: 'character',
+        label: profile.displayName,
+      })
+    }
+
+    return options
+  }
+
+  function getCurrentTrackedParticipantLabel(): string {
+    const trackableParticipants = getTrackableParticipants()
+    const matched = trackableParticipants.find(
+      (option) =>
+        option.participantKind === currentChatPreferences?.trackedParticipantKind &&
+        option.participantId === currentChatPreferences?.trackedParticipantId,
+    )
+    return matched?.label ?? (currentChatPreferences?.trackedParticipantKind === 'character' ? 'Character' : 'User')
+  }
+
+  function getCurrentTrackedZoneLabel(): string {
+    if (!currentChatPreferences) return 'pending'
+    return currentChatPreferences.primaryContactZone === 'custom'
+      ? `custom (${currentChatPreferences.customContactZone || 'unset'})`
+      : currentChatPreferences.primaryContactZone
+  }
+
   function updateDebugIndicator() {
     if (!SHOW_PHASE4_DEBUG && !SHOW_PHASE5_DEBUG && !SHOW_PHASE6_DEBUG && !SHOW_PHASE7_DEBUG) return
 
@@ -788,6 +848,7 @@ export function setup(ctx: SpindleFrontendContext) {
     const characterNode = debugIndicator.querySelector('.lummate-phase5-debug-character')
     const fingerprintNode = debugIndicator.querySelector('.lummate-phase5-debug-fingerprint')
     const zoneNode = debugIndicator.querySelector('.lummate-phase6-debug-zone')
+    const settingsZoneNode = debugIndicator.querySelector('.lummate-phase6-debug-settings-zone')
     const actorStateNode = debugIndicator.querySelector('.lummate-phase6-debug-actor')
     const acteeStateNode = debugIndicator.querySelector('.lummate-phase6-debug-actee')
     const continuityNode = debugIndicator.querySelector('.lummate-phase7-debug-continuity')
@@ -836,18 +897,22 @@ export function setup(ctx: SpindleFrontendContext) {
 
     if (SHOW_PHASE6_DEBUG) {
       if (zoneNode) {
-        const activeZone =
-          draftSettings?.parser.primaryUserContactZone ??
+        zoneNode.textContent = `Tracked: ${getCurrentTrackedParticipantLabel()} / zone: ${getCurrentTrackedZoneLabel()}`
+      }
+      if (settingsZoneNode) {
+        const savedZone =
           settingsPayload?.settings.parser.primaryUserContactZone ??
           'pending'
-        const customZone =
-          draftSettings?.parser.customUserContactZone ??
-          settingsPayload?.settings.parser.customUserContactZone ??
-          ''
-        zoneNode.textContent =
-          activeZone === 'custom'
-            ? `Primary zone: custom (${customZone || 'unset'})`
-            : `Primary zone: ${activeZone}`
+        const savedCustomZone =
+          settingsPayload?.settings.parser.customUserContactZone ?? ''
+        const draftZone =
+          draftSettings?.parser.primaryUserContactZone ??
+          'pending'
+        const draftCustomZone =
+          draftSettings?.parser.customUserContactZone ?? ''
+        const formatZone = (zone: string, customZone: string) =>
+          zone === 'custom' ? `custom (${customZone || 'unset'})` : zone
+        settingsZoneNode.textContent = `Settings zone: saved ${formatZone(savedZone, savedCustomZone)} / draft ${formatZone(draftZone, draftCustomZone)}`
       }
       if (actorStateNode) {
         actorStateNode.textContent = formatParticipantStateAssignments(
@@ -956,6 +1021,7 @@ export function setup(ctx: SpindleFrontendContext) {
     activeMessageId = null
     currentPlan = null
     parserSessionState = null
+    currentChatPreferences = null
     syncVisuals()
     updateDebugIndicator()
 
@@ -993,6 +1059,30 @@ export function setup(ctx: SpindleFrontendContext) {
     for (const element of panel.querySelectorAll('.lummate-phase1-mode-button')) {
       if (!(element instanceof HTMLButtonElement)) continue
       element.dataset.active = element.dataset.mode === activeMode ? 'true' : 'false'
+    }
+  }
+
+  function updateBreakoutTrackingButtons(messageId: string) {
+    const panel = breakoutPanels.get(messageId)
+    if (!panel) return
+
+    const row = panel.querySelector('.lummate-phase1-breakout-track-row') as HTMLElement | null
+    if (!row) return
+
+    row.textContent = ''
+    for (const option of getTrackableParticipants()) {
+      const button = document.createElement('button')
+      button.type = 'button'
+      button.className = 'lummate-phase1-track-button'
+      button.dataset.participantId = option.participantId ?? ''
+      button.dataset.participantKind = option.participantKind
+      button.dataset.active =
+        option.participantKind === currentChatPreferences?.trackedParticipantKind &&
+        option.participantId === currentChatPreferences?.trackedParticipantId
+          ? 'true'
+          : 'false'
+      button.textContent = option.label
+      row.appendChild(button)
     }
   }
 
@@ -1292,7 +1382,7 @@ export function setup(ctx: SpindleFrontendContext) {
       }),
     )
 
-    const contactZoneMount = createField(parserGrid, 'Primary user contact zone')
+    const contactZoneMount = createField(parserGrid, 'Default tracked contact zone')
     registerSettingsComponent(
       ctx.components.mountSelect(contactZoneMount, {
         options: [
@@ -1315,13 +1405,13 @@ export function setup(ctx: SpindleFrontendContext) {
     if (draftSettings.parser.primaryUserContactZone === 'custom') {
       const customZoneMount = createField(
         parserGrid,
-        'Custom zone terms',
+        'Custom tracked-zone terms',
       )
       registerSettingsComponent(
         ctx.components.mountTextInput(customZoneMount, {
           value: draftSettings.parser.customUserContactZone,
           placeholder: 'Example: anus, asshole, rear',
-          ariaLabel: 'Custom user contact zone terms',
+          ariaLabel: 'Custom tracked contact zone terms',
           onChange: (value) => {
             if (!draftSettings) return
             draftSettings.parser.customUserContactZone = value.trim()
@@ -1730,12 +1820,42 @@ export function setup(ctx: SpindleFrontendContext) {
   }
 
   function ensureControl(messageId: string, sourceElement: Element) {
+    const existingWrapper = injections.get(messageId)
+    const existingTarget = targets.get(messageId)
+
+    if (existingWrapper && !existingWrapper.isConnected) {
+      injections.delete(messageId)
+      buttons.delete(messageId)
+      menuButtons.delete(messageId)
+      statusLabels.delete(messageId)
+      breakoutPanels.delete(messageId)
+      if (existingTarget === existingWrapper.parentElement || existingTarget?.isConnected === false) {
+        targets.delete(messageId)
+      }
+    }
+
     if (injections.has(messageId)) {
+      if (existingTarget && existingTarget !== findActionRowTarget(sourceElement)) {
+        const wrapper = injections.get(messageId)
+        if (wrapper?.isConnected) {
+          ctx.dom.uninject(wrapper)
+        }
+        injections.delete(messageId)
+        buttons.delete(messageId)
+        menuButtons.delete(messageId)
+        statusLabels.delete(messageId)
+        breakoutPanels.delete(messageId)
+        targets.delete(messageId)
+      } else {
+        updateMessageVisual(messageId)
+        return
+      }
+    }
+
+    if (sourceElement.querySelector(CONTROL_SELECTOR)) {
       updateMessageVisual(messageId)
       return
     }
-
-    if (sourceElement.querySelector(CONTROL_SELECTOR)) return
 
     const target = findActionRowTarget(sourceElement)
 
@@ -1763,6 +1883,8 @@ export function setup(ctx: SpindleFrontendContext) {
               <button type="button" class="lummate-phase1-mode-button" data-mode="loop">Loop</button>
               <button type="button" class="lummate-phase1-mode-button" data-mode="hold">Play & Hold</button>
             </div>
+            <div class="lummate-phase1-breakout-title">Track</div>
+            <div class="lummate-phase1-breakout-row lummate-phase1-breakout-track-row"></div>
             <div class="lummate-phase1-breakout-title">Actions</div>
             <div class="lummate-phase1-breakout-row">
               <button type="button" class="lummate-phase1-breakout-action" data-action="regenerate">Regenerate</button>
@@ -1871,6 +1993,39 @@ export function setup(ctx: SpindleFrontendContext) {
         return
       }
 
+      const trackButton = targetElement.closest('.lummate-phase1-track-button') as HTMLButtonElement | null
+      if (trackButton) {
+        const participantKind =
+          trackButton.dataset.participantKind === 'character' ? 'character' : 'persona'
+        const participantId =
+          participantKind === 'persona' ? null : trackButton.dataset.participantId?.trim() || null
+        const nextPreferences: ChatTrackingPreferences = {
+          trackedParticipantId: participantId,
+          trackedParticipantKind: participantKind,
+          primaryContactZone:
+            draftSettings?.parser.primaryUserContactZone ??
+            settingsPayload?.settings.parser.primaryUserContactZone ??
+            currentChatPreferences?.primaryContactZone ??
+            'genitals',
+          customContactZone:
+            draftSettings?.parser.customUserContactZone ??
+            settingsPayload?.settings.parser.customUserContactZone ??
+            currentChatPreferences?.customContactZone ??
+            '',
+        }
+        currentChatPreferences = nextPreferences
+        updateBreakoutTrackingButtons(messageId)
+        updateDebugIndicator()
+        ctx.sendToBackend({
+          type: 'lummate.phase3.set_tracking_preferences',
+          payload: {
+            ...getActiveChatContext(),
+            ...nextPreferences,
+          },
+        })
+        return
+      }
+
       const actionButton = targetElement.closest('.lummate-phase1-breakout-action') as HTMLButtonElement | null
       if (actionButton?.dataset.action === 'regenerate') {
         status.textContent = 'Regenerating...'
@@ -1894,14 +2049,29 @@ export function setup(ctx: SpindleFrontendContext) {
     targets.set(messageId, target)
     updateMessageVisual(messageId)
     updateBreakoutModeButtons(messageId)
+    updateBreakoutTrackingButtons(messageId)
   }
 
   function scanMessages() {
     const visibleMessages = getVisibleMessageTargets()
+    const visibleMessageIds = new Set(visibleMessages.map((message) => message.messageId))
+
+    for (const [messageId, wrapper] of injections.entries()) {
+      if (!wrapper.isConnected && !visibleMessageIds.has(messageId)) {
+        injections.delete(messageId)
+        buttons.delete(messageId)
+        menuButtons.delete(messageId)
+        statusLabels.delete(messageId)
+        breakoutPanels.delete(messageId)
+        targets.delete(messageId)
+      }
+    }
 
     for (const message of visibleMessages) {
       ensureControl(message.messageId, message.element)
     }
+
+    syncVisuals()
   }
 
   function applyBootstrap(payload: BootstrapPayload) {
@@ -1909,20 +2079,27 @@ export function setup(ctx: SpindleFrontendContext) {
     activeMessageId = payload.session.activeMessageId
     currentPlan = payload.session.runtimePlans.currentPlan
     parserSessionState = payload.session.parserSession
+    currentChatPreferences = payload.chatPreferences
+    participantProfiles = payload.participantProfiles
     syncVisuals()
     updateDebugIndicator()
     for (const messageId of breakoutPanels.keys()) {
       updateBreakoutModeButtons(messageId)
+      updateBreakoutTrackingButtons(messageId)
     }
   }
 
   function applySettingsBootstrap(payload: SettingsBootstrapPayload, saved: boolean) {
     settingsPayload = payload
     participantProfiles = payload.participantProfiles
+    currentChatPreferences = payload.chatPreferences
     draftSettings = cloneSettings(payload.settings)
     settingsSaveInFlight = false
     settingsStatus = saved ? 'Settings saved' : 'Settings loaded'
     updateDebugIndicator()
+    for (const messageId of breakoutPanels.keys()) {
+      updateBreakoutTrackingButtons(messageId)
+    }
     renderSettingsTab()
   }
 
@@ -1949,6 +2126,9 @@ export function setup(ctx: SpindleFrontendContext) {
         participantProfiles = payload.payload
         settingsStatus = 'Participant profiles refreshed'
         updateDebugIndicator()
+        for (const messageId of breakoutPanels.keys()) {
+          updateBreakoutTrackingButtons(messageId)
+        }
         renderSettingsTab()
         break
     }

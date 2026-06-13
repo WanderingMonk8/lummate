@@ -25,10 +25,13 @@ The Lumiverse-side extension has been verified in Lumiverse far enough to confir
 - a Lummate settings drawer is available for parser connection selection, XToys action-name mapping, and Lumiverse-side tactile calibration presets
 - participant tactile profiles are derived, cached, regenerable, and reused
 - group chats can cache more than one character profile when Lumiverse exposes the participant roster
-- a heuristic planner stub runs on Play and produces runtime message plans
-- current physical/emotional state parsing is implemented heuristically with baseline fallback and verification debug output
+- tracked participant selection is available per chat, with persisted contact-zone targeting
+- Play now produces runtime message plans with ordered semantic/resolved beats
+- current physical/emotional state parsing is implemented with baseline fallback and verification debug output
+- the parser can use structured LLM output with deterministic zone-scoped fallback and sentence-to-beat trace debugging
+- contact filtering now respects tracked participant ownership, tracked contact zones, and multi-participant scene context
 
-The project is still pre-LLM semantic parsing and pre-XToys runtime integration, but the Lumiverse-side shell, state model, profile cache, and verification surfaces are now active and testable inside Lumiverse.
+The project is still pre-XToys runtime integration, and the parser still mixes LLM output with deterministic fallback logic while the scene-matching rules are being tuned. But the Lumiverse-side shell, state model, tracked-participant flow, profile cache, and verification surfaces are now active and testable inside Lumiverse.
 
 The main working documents are:
 
@@ -47,8 +50,8 @@ The planned extension will:
 
 ## Near-Term Goals
 
-- replace the heuristic planner stub with LLM-backed semantic parsing
-- deepen semantic beat parsing and multi-beat message plan generation
-- improve participant-aware state attribution and contact filtering with structured parser output
+- keep tightening tracked-participant and tracked-zone parsing across mixed multi-party scenes
+- improve action continuity, pause detection, and per-beat transition handling
 - integrate XToys webhook command dispatch
+- reduce dependence on deterministic parser fallback as structured parser coverage improves
 - remove temporary debug surfaces once each implementation phase is validated

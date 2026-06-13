@@ -3,8 +3,10 @@ import {
   CALIBRATABLE_ACTION_TYPES,
   CALIBRATION_EXECUTION_PROFILES,
   ALL_ACTION_TYPES,
+  DEFAULT_CHAT_TRACKING_PREFERENCES,
   DEFAULT_USER_SETTINGS,
   type ActionCalibrationPreset,
+  type ChatTrackingPreferences,
   type ParticipantProfile,
   type XToysActionMappingSettings,
   type UserSettings,
@@ -12,9 +14,14 @@ import {
 
 const SETTINGS_PATH = 'phase1/settings.json'
 const PARTICIPANT_PROFILES_PATH = 'phase5/participant-profiles.json'
+const CHAT_TRACKING_PREFERENCES_PATH = 'phase7/chat-tracking-preferences.json'
 
 interface ParticipantProfileStore {
   profiles: Record<string, ParticipantProfile>
+}
+
+interface ChatTrackingPreferenceStore {
+  chats: Record<string, ChatTrackingPreferences>
 }
 
 function buildDefaultActionMappings(): XToysActionMappingSettings[] {
@@ -68,6 +75,18 @@ function mergeSettings(settings: UserSettings): UserSettings {
   }
 }
 
+function mergeChatTrackingPreferences(
+  preferences: Partial<ChatTrackingPreferences> | null | undefined,
+  settings: UserSettings,
+): ChatTrackingPreferences {
+  return {
+    ...DEFAULT_CHAT_TRACKING_PREFERENCES,
+    primaryContactZone: settings.parser.primaryUserContactZone,
+    customContactZone: settings.parser.customUserContactZone,
+    ...preferences,
+  }
+}
+
 export async function readUserSettings(
   spindle: SpindleAPI,
   userId: string,
@@ -85,6 +104,46 @@ export async function writeUserSettings(
   settings: UserSettings,
 ): Promise<void> {
   await spindle.userStorage.setJson(SETTINGS_PATH, mergeSettings(settings), {
+    indent: 2,
+    userId,
+  })
+}
+
+export async function readChatTrackingPreferenceStore(
+  spindle: SpindleAPI,
+  userId: string,
+): Promise<ChatTrackingPreferenceStore> {
+  return spindle.userStorage.getJson<ChatTrackingPreferenceStore>(CHAT_TRACKING_PREFERENCES_PATH, {
+    fallback: { chats: {} },
+    userId,
+  })
+}
+
+export async function readChatTrackingPreferences(
+  spindle: SpindleAPI,
+  userId: string,
+  chatId: string | null,
+  settings: UserSettings,
+): Promise<ChatTrackingPreferences> {
+  if (!chatId) {
+    return mergeChatTrackingPreferences(null, settings)
+  }
+
+  const store = await readChatTrackingPreferenceStore(spindle, userId)
+  return mergeChatTrackingPreferences(store.chats[chatId], settings)
+}
+
+export async function writeChatTrackingPreferences(
+  spindle: SpindleAPI,
+  userId: string,
+  chatId: string,
+  preferences: ChatTrackingPreferences,
+  settings: UserSettings,
+): Promise<void> {
+  const store = await readChatTrackingPreferenceStore(spindle, userId)
+  store.chats[chatId] = mergeChatTrackingPreferences(preferences, settings)
+
+  await spindle.userStorage.setJson(CHAT_TRACKING_PREFERENCES_PATH, store, {
     indent: 2,
     userId,
   })

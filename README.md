@@ -30,6 +30,8 @@ The Lumiverse-side extension has been verified in Lumiverse far enough to confir
 - current physical/emotional state parsing is implemented with baseline fallback and verification debug output
 - the parser can use structured LLM output with deterministic zone-scoped fallback and sentence-to-beat trace debugging
 - contact filtering now respects tracked participant ownership, tracked contact zones, and multi-participant scene context
+- calibrated tactile resolution is now active, including preset fallback, XToys action-name mapping, participant contribution modulation, and safety-clamped resolved beats
+- tactile calibration changes now affect resolved beat output during verification
 
 The project is still pre-XToys runtime integration, and the parser still mixes LLM output with deterministic fallback logic while the scene-matching rules are being tuned. But the Lumiverse-side shell, state model, tracked-participant flow, profile cache, and verification surfaces are now active and testable inside Lumiverse.
 
@@ -54,4 +56,5 @@ The planned extension will:
 - improve action continuity, pause detection, and per-beat transition handling
 - integrate XToys webhook command dispatch
 - reduce dependence on deterministic parser fallback as structured parser coverage improves
+- deepen the calibrated contribution model and expose clearer resolution diagnostics where needed
 - remove temporary debug surfaces once each implementation phase is validated

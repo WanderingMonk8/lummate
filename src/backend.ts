@@ -7,6 +7,7 @@ import type {
   ChatTrackingPreferences,
   ConnectionProfileSummary,
   FrontendToBackendMessage,
+  MechanicalAxes,
   MessagePlan,
   PlaybackMode,
   ParticipantKind,
@@ -18,6 +19,7 @@ import type {
   ResolvedBeat,
   SemanticBeat,
   SessionState,
+  XToysActionMappingSettings,
   UserSettings,
 } from './shared/contracts'
 import type { LlmMessageDTO } from 'lumiverse-spindle-types'
@@ -28,7 +30,11 @@ import {
   writeChatTrackingPreferences,
   writeUserSettings,
 } from './backend/storage'
-import { DEFAULT_RUNTIME_PLAN_BUFFER, DEFAULT_SESSION_STATE } from './shared/contracts'
+import {
+  DEFAULT_MECHANICAL_AXES,
+  DEFAULT_RUNTIME_PLAN_BUFFER,
+  DEFAULT_SESSION_STATE,
+} from './shared/contracts'
 
 interface LlmParserParticipantStatePayload {
   arousal?: number
@@ -888,6 +894,262 @@ function resolveCombinedResponseFactors(semanticBeat: SemanticBeat) {
       return { amplitudeFactor, tempoFactor }
     }
   }
+}
+
+function buildParticipantProfileIndex(
+  participantProfiles: ParticipantProfileBundle,
+): Map<string, ParticipantProfile> {
+  const index = new Map<string, ParticipantProfile>()
+
+  if (participantProfiles.userProfile) {
+    index.set(
+      `${participantProfiles.userProfile.participantKind}:${participantProfiles.userProfile.participantId}`,
+      participantProfiles.userProfile,
+    )
+  }
+
+  for (const profile of participantProfiles.characterProfiles) {
+    index.set(`${profile.participantKind}:${profile.participantId}`, profile)
+  }
+
+  return index
+}
+
+function resolveEffectiveMechanicalAxes(profile: ParticipantProfile | null): MechanicalAxes {
+  if (!profile) {
+    return { ...DEFAULT_MECHANICAL_AXES }
+  }
+
+  return {
+    baselineStrengthBias: clamp(
+      profile.mechanicalAxes.baselineStrengthBias + (profile.userOverrides.baselineStrengthBias ?? 0),
+      -100,
+      100,
+    ),
+    baselineTempoBias: clamp(
+      profile.mechanicalAxes.baselineTempoBias + (profile.userOverrides.baselineTempoBias ?? 0),
+      -100,
+      100,
+    ),
+    rampAggression: clamp(
+      profile.mechanicalAxes.rampAggression + (profile.userOverrides.rampAggression ?? 0),
+      -100,
+      100,
+    ),
+    motionWeight: clamp(
+      profile.mechanicalAxes.motionWeight + (profile.userOverrides.motionWeight ?? 0),
+      -100,
+      100,
+    ),
+    endurance: clamp(
+      profile.mechanicalAxes.endurance + (profile.userOverrides.endurance ?? 0),
+      -100,
+      100,
+    ),
+    smoothness: clamp(
+      profile.mechanicalAxes.smoothness + (profile.userOverrides.smoothness ?? 0),
+      -100,
+      100,
+    ),
+    dominancePressure: clamp(
+      profile.mechanicalAxes.dominancePressure + (profile.userOverrides.dominancePressure ?? 0),
+      -100,
+      100,
+    ),
+    teasingTendency: clamp(
+      profile.mechanicalAxes.teasingTendency + (profile.userOverrides.teasingTendency ?? 0),
+      -100,
+      100,
+    ),
+  }
+}
+
+function getProfileKey(
+  participantKind: ParticipantKind | null,
+  participantId: string | null,
+): string | null {
+  if (!participantKind || !participantId) return null
+  return `${participantKind}:${participantId}`
+}
+
+function computeParticipantContribution(
+  assignment: ParticipantStateAssignment,
+  profile: ParticipantProfile | null,
+): {
+  amplitudeFactor: number
+  tempoFactor: number
+  durationFactor: number
+} {
+  const axes = resolveEffectiveMechanicalAxes(profile)
+  const arousalOffset = (assignment.state.arousal - 50) / 50
+  const energyOffset = (assignment.state.energy - 50) / 50
+  const steadinessOffset = (assignment.state.steadiness - 50) / 50
+  const focusOffset = (assignment.state.focus - 50) / 50
+
+  const amplitudeBias =
+    axes.baselineStrengthBias * 0.0018 +
+    axes.motionWeight * 0.0012 +
+    axes.dominancePressure * 0.0015 +
+    axes.rampAggression * 0.001 +
+    arousalOffset * 0.18 +
+    energyOffset * 0.08 +
+    steadinessOffset * 0.04
+
+  const tempoBias =
+    axes.baselineTempoBias * 0.0018 +
+    axes.smoothness * 0.0008 +
+    axes.teasingTendency * 0.001 +
+    energyOffset * 0.18 +
+    focusOffset * 0.08 +
+    arousalOffset * 0.06 -
+    Math.max(0, -steadinessOffset) * 0.05
+
+  const durationBias =
+    axes.endurance * 0.0015 +
+    axes.teasingTendency * 0.0008 +
+    axes.smoothness * 0.0006 +
+    arousalOffset * 0.06 +
+    energyOffset * 0.04 +
+    focusOffset * 0.03
+
+  return {
+    amplitudeFactor: clamp(1 + amplitudeBias, 0.7, 1.4),
+    tempoFactor: clamp(1 + tempoBias, 0.7, 1.4),
+    durationFactor: clamp(1 + durationBias, 0.8, 1.35),
+  }
+}
+
+function blendSideContributions(
+  assignments: ParticipantStateAssignment[],
+  profileIndex: Map<string, ParticipantProfile>,
+): {
+  amplitudeFactor: number
+  tempoFactor: number
+  durationFactor: number
+} {
+  if (assignments.length === 0) {
+    return { amplitudeFactor: 1, tempoFactor: 1, durationFactor: 1 }
+  }
+
+  let totalWeight = 0
+  let amplitude = 0
+  let tempo = 0
+  let duration = 0
+
+  for (const assignment of assignments) {
+    const weight = assignment.weight > 0 ? assignment.weight : 1
+    totalWeight += weight
+    const profile = profileIndex.get(
+      getProfileKey(assignment.participantKind, assignment.participantId) ?? '',
+    ) ?? null
+    const contribution = computeParticipantContribution(assignment, profile)
+    amplitude += contribution.amplitudeFactor * weight
+    tempo += contribution.tempoFactor * weight
+    duration += contribution.durationFactor * weight
+  }
+
+  if (totalWeight <= 0) {
+    return { amplitudeFactor: 1, tempoFactor: 1, durationFactor: 1 }
+  }
+
+  return {
+    amplitudeFactor: amplitude / totalWeight,
+    tempoFactor: tempo / totalWeight,
+    durationFactor: duration / totalWeight,
+  }
+}
+
+function resolveParticipantContributionFactors(
+  semanticBeat: SemanticBeat,
+  participantStates: ParticipantStateAssignment[],
+  participantProfiles: ParticipantProfileBundle,
+) {
+  const profileIndex = buildParticipantProfileIndex(participantProfiles)
+  const actorAssignments = participantStates.filter((assignment) => assignment.side === 'actor')
+  const acteeAssignments = participantStates.filter((assignment) => assignment.side === 'actee')
+  const actorContribution = blendSideContributions(actorAssignments, profileIndex)
+  const acteeContribution = blendSideContributions(acteeAssignments, profileIndex)
+
+  return {
+    amplitudeFactor: clamp(
+      actorContribution.amplitudeFactor * semanticBeat.actorWeight +
+        acteeContribution.amplitudeFactor * semanticBeat.acteeWeight,
+      0.75,
+      1.35,
+    ),
+    tempoFactor: clamp(
+      actorContribution.tempoFactor * semanticBeat.actorWeight +
+        acteeContribution.tempoFactor * semanticBeat.acteeWeight,
+      0.75,
+      1.35,
+    ),
+    durationFactor: clamp(
+      actorContribution.durationFactor * semanticBeat.actorWeight +
+        acteeContribution.durationFactor * semanticBeat.acteeWeight,
+      0.85,
+      1.3,
+    ),
+  }
+}
+
+function resolveCalibratedAxisBase(
+  semanticValue: number,
+  presetBase: number,
+): number {
+  return clamp(Math.round(presetBase + (semanticValue - 50)), 0, 100)
+}
+
+function resolvePresetForActionType(
+  actionType: ActionType,
+  settings: UserSettings,
+): ActionCalibrationPreset | null {
+  const presetsByType = new Map<ActionType, ActionCalibrationPreset>(
+    settings.actionCalibrationPresets.map((preset) => [preset.semanticActionType, preset]),
+  )
+  const visited = new Set<ActionType>()
+  let current: ActionType | null = actionType
+
+  while (current && !visited.has(current)) {
+    visited.add(current)
+    const preset: ActionCalibrationPreset | null = presetsByType.get(current) ?? null
+    if (preset?.supported) {
+      return preset
+    }
+    current = preset?.fallbackTarget ?? null
+  }
+
+  return settings.actionCalibrationPresets.find((preset) => preset.supported) ?? null
+}
+
+function resolveMappingForActionType(
+  actionType: ActionType,
+  settings: UserSettings,
+  fallbackPreset: ActionCalibrationPreset | null,
+): XToysActionMappingSettings | null {
+  const mappingsByType = new Map<ActionType, XToysActionMappingSettings>(
+    settings.xtoysActionMappings.map((mapping) => [mapping.semanticActionType, mapping]),
+  )
+  const visited = new Set<ActionType>()
+  let current: ActionType | null = actionType
+
+  while (current && !visited.has(current)) {
+    visited.add(current)
+    const mapping = mappingsByType.get(current) ?? null
+    if (mapping?.supported && (mapping.xtoysActionName || mapping.fallbackActionName)) {
+      return mapping
+    }
+    const fallbackPresetForType =
+      settings.actionCalibrationPresets.find((preset) => preset.semanticActionType === current) ?? null
+    current = fallbackPresetForType?.fallbackTarget ?? null
+  }
+
+  if (fallbackPreset) {
+    return mappingsByType.get(fallbackPreset.semanticActionType) ?? null
+  }
+
+  return settings.xtoysActionMappings.find(
+    (mapping) => mapping.supported && (mapping.xtoysActionName || mapping.fallbackActionName),
+  ) ?? null
 }
 
 function sortBeatPayloads(beats: LlmParserBeatPayload[]) {
@@ -2542,11 +2804,9 @@ async function buildMessagePlan(
   const sortedLlmBeats = parsedScene?.relevant ? sortBeatPayloads(parsedScene.beats) : []
   const llmBeat = sortedLlmBeats[0] ?? null
   const resolvedActionType = llmBeat ? normalizeActionType(llmBeat.action_type) : actionType
-  const resolvedPreset =
-    settings.actionCalibrationPresets.find((entry) => entry.semanticActionType === resolvedActionType) ??
-    preset
+  const resolvedPreset = resolvePresetForActionType(resolvedActionType, settings) ?? preset
   const resolvedMapping =
-    settings.xtoysActionMappings.find((entry) => entry.semanticActionType === resolvedActionType) ?? mapping
+    resolveMappingForActionType(resolvedActionType, settings, resolvedPreset) ?? mapping
 
   const parserSource: MessagePlan['parserSource'] =
     parsedScene?.relevant && parsedScene.beats.length > 0
@@ -2647,41 +2907,6 @@ async function buildMessagePlan(
         ]
         : []
 
-  const resolvedBeats: ResolvedBeat[] = semanticBeats.map((semanticBeat) => {
-    const beatPreset =
-      settings.actionCalibrationPresets.find((entry) => entry.semanticActionType === semanticBeat.actionType) ??
-      resolvedPreset
-    const beatMapping =
-      settings.xtoysActionMappings.find((entry) => entry.semanticActionType === semanticBeat.actionType) ??
-      resolvedMapping
-    const responseFactors = resolveCombinedResponseFactors(semanticBeat)
-
-    return {
-      messageId,
-      orderIndex: semanticBeat.orderIndex,
-      sourceExcerpt: semanticBeat.sourceExcerpt,
-      actionType: semanticBeat.actionType,
-      xtoysActionName:
-        beatMapping?.xtoysActionName || beatMapping?.fallbackActionName || semanticBeat.actionType,
-      executionProfile: beatPreset.preferredExecutionProfile,
-      amplitude: clamp(Math.round(semanticBeat.strength * responseFactors.amplitudeFactor), 0, 100),
-      tempo: clamp(Math.round(semanticBeat.frequency * responseFactors.tempoFactor), 0, 100),
-      durationMs: semanticBeat.durationMs,
-      transitionStyle: semanticBeat.transitionStyle,
-      countHint: semanticBeat.countHint,
-      persistence: semanticBeat.persistence,
-      fallbackBehavior: semanticBeat.fallbackBehavior,
-    }
-  })
-
-  const terminalSemanticBeat = [...semanticBeats]
-    .sort((left, right) => left.orderIndex - right.orderIndex)
-    .at(-1) ?? null
-  const continuityVerdict =
-    parsedScene?.relevant && parsedScene.continuity_verdict != null
-      ? parsedScene.continuity_verdict
-      : resolveContinuityVerdict(session.runtimePlans.currentPlan, terminalSemanticBeat)
-  const transitionMode = resolveTransitionMode(continuityVerdict)
   const participantStates =
     parsedScene != null
       ? mapLlmParticipantsToAssignments(
@@ -2702,6 +2927,68 @@ async function buildMessagePlan(
           chatPreferences.customContactZone,
         )
 
+  const resolvedBeats: ResolvedBeat[] = semanticBeats.map((semanticBeat) => {
+    const beatPreset =
+      resolvePresetForActionType(semanticBeat.actionType, settings) ??
+      resolvedPreset
+    const beatMapping =
+      resolveMappingForActionType(semanticBeat.actionType, settings, beatPreset) ??
+      resolvedMapping
+    const responseFactors = resolveCombinedResponseFactors(semanticBeat)
+    const participantFactors = resolveParticipantContributionFactors(
+      semanticBeat,
+      participantStates,
+      participantProfiles,
+    )
+    const amplitudeFactor = clamp(
+      responseFactors.amplitudeFactor * participantFactors.amplitudeFactor,
+      0.5,
+      1.75,
+    )
+    const tempoFactor = clamp(
+      responseFactors.tempoFactor * participantFactors.tempoFactor,
+      0.5,
+      1.75,
+    )
+    const calibratedAmplitudeBase = resolveCalibratedAxisBase(
+      semanticBeat.strength,
+      beatPreset.baseAmplitude,
+    )
+    const calibratedTempoBase = resolveCalibratedAxisBase(
+      semanticBeat.frequency,
+      beatPreset.baseTempo,
+    )
+
+    return {
+      messageId,
+      orderIndex: semanticBeat.orderIndex,
+      sourceExcerpt: semanticBeat.sourceExcerpt,
+      actionType: semanticBeat.actionType,
+      xtoysActionName:
+        beatMapping?.xtoysActionName || beatMapping?.fallbackActionName || semanticBeat.actionType,
+      executionProfile: beatPreset.preferredExecutionProfile,
+      amplitude: clamp(Math.round(calibratedAmplitudeBase * amplitudeFactor), 0, 100),
+      tempo: clamp(Math.round(calibratedTempoBase * tempoFactor), 0, 100),
+      durationMs: clamp(
+        Math.round(semanticBeat.durationMs * participantFactors.durationFactor),
+        250,
+        30000,
+      ),
+      transitionStyle: semanticBeat.transitionStyle,
+      countHint: semanticBeat.countHint,
+      persistence: semanticBeat.persistence,
+      fallbackBehavior: semanticBeat.fallbackBehavior,
+    }
+  })
+
+  const terminalSemanticBeat = [...semanticBeats]
+    .sort((left, right) => left.orderIndex - right.orderIndex)
+    .at(-1) ?? null
+  const continuityVerdict =
+    parsedScene?.relevant && parsedScene.continuity_verdict != null
+      ? parsedScene.continuity_verdict
+      : resolveContinuityVerdict(session.runtimePlans.currentPlan, terminalSemanticBeat)
+  const transitionMode = resolveTransitionMode(continuityVerdict)
     return {
       messageId,
       createdAt: new Date().toISOString(),

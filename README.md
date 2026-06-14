@@ -1,14 +1,42 @@
 # Lummate
 
-Lummate is a Lumiverse extension for tactile AI roleplay integration with XToys.
+Lummate is a Lumiverse extension that turns erotic roleplay scenes into tactile playback for XToys.
 
-The project is currently focused on the Lumiverse-side architecture for:
+Instead of firing blindly on every message, Lummate reads the scene, figures out who is involved, identifies the relevant contact, builds a beat-by-beat action plan, and sends the result to XToys in a form that can actually be used in real setups.
 
-- semantic parsing of erotic roleplay scenes
-- participant-aware tactile planning
-- per-user calibration of semantic action mappings
-- held-state continuity between messages
-- beat-by-beat playback orchestration from Lumiverse to XToys
+Share link: [Jump to Highlights](#highlights)
+
+## Highlights
+
+- **On-demand tactile playback**
+  Add a `Play / Stop` control directly to Lumiverse messages and trigger tactile playback only when you want it.
+
+- **Scene-aware parsing**
+  Lummate parses erotic roleplay text into semantic actions like `thrust`, `suction`, `stroke`, `grind`, `lick`, and more.
+
+- **Tracked-character targeting**
+  Choose who the extension should follow in a scene instead of assuming the user is always the active participant.
+
+- **Contact-zone filtering**
+  Target the relevant zone for the tracked participant, including default and custom contact zones, so parsing stays grounded in the part of the scene you actually care about.
+
+- **Group-scene support**
+  Works across multi-character scenes, with participant-aware filtering and weighting instead of treating every scene like a one-on-one exchange.
+
+- **Beat-by-beat action planning**
+  Converts messages into ordered tactile beats with timing, continuity, and playback decisions rather than a single flat trigger.
+
+- **Held-state and continuity handling**
+  Preserves ongoing actions across messages so scenes can continue, transition, pause, resume, loop, or hold more naturally.
+
+- **Per-action tactile calibration**
+  Tune how each semantic action should feel on your own setup instead of relying on one universal interpretation.
+
+- **XToys-ready webhook delivery**
+  Sends XToys-compatible action triggers using quantized `low`, `medium`, and `high` intensity levels, plus optional intensity and ramp fields.
+
+- **Desktop and mobile controls**
+  Supports desktop hover breakout controls and mobile long-press controls for a cleaner per-message UI.
 
 ## Current Status
 

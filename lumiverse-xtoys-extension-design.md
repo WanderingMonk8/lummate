@@ -1207,35 +1207,54 @@ If a user marks an action type as unsupported for their setup, the planner shoul
 
 ## XToys Execution Modes
 
-XToys appears to support two useful execution styles:
+XToys appears to support three useful execution styles:
 
-### 1. Direct Scripted Control
+### 1. Single Mechanical Action Triggers
 
-This is the simplest and most reliable v1 path.
+XToys can trigger one preconfigured action on one mechanical axis, such as vibration, inflation, or position, usually with a target intensity and ramp speed.
 
-The XToys script reacts to webhook actions and uses actions, expressions, and jobs to:
+This is useful for simple testing and direct device sanity checks, but it gives Lumiverse very little room to shape tactile variation beyond selecting the action and passing scalar values.
 
-- change intensity
-- ramp intensity up or down
-- switch steps based on timing or state
-- stop or resume behavior
+Because the mechanical behavior is largely predefined on the XToys side, this should be treated as a minimal compatibility path rather than the preferred semantic runtime.
 
-This is especially suitable for:
+### 2. Quantized Pattern Dispatch
 
-- vibrators
-- suction toys
-- generic intensity-based devices
+This should be the preferred v1 delivery model.
 
-### 2. Pattern-Assisted Control
+In this model, Lumiverse still resolves the semantic beat, but instead of trying to command fully continuous toy motion, it emits a quantized XToys action name for that beat:
 
-XToys patterns are still useful, but as execution helpers rather than the main planning layer.
+- `name-low`
+- `name-medium`
+- `name-high`
 
-Relevant pattern types include:
+Examples:
 
-- scripted patterns, which support dynamic variables for `step size`, `loops`, and `scale`
-- funscript patterns, which are especially well suited to stroker or thrust-position toys
+- `thrust-low`
+- `thrust-medium`
+- `thrust-high`
+- `suction-low`
+- `grind-high`
 
-This is most useful when a beat should express a richer repeated motion rather than a simple steady intensity.
+The XToys side then maps each quantized action onto a prebuilt pattern or local action stack.
+
+This preserves a useful amount of semantic variation while staying compatible with the private-webhook action style that real XToys setups already use successfully.
+
+Lumiverse may still send scalar fields such as intensity or ramp time for local XToys expressions, but the primary execution contract is the quantized action trigger itself.
+
+### 3. Direct Scripted Axis Modulation
+
+This is the long-term highest-control model, but it should be deferred beyond v1.
+
+In this model, Lumiverse continuously drives the XToys runtime through repeated webhook updates, treating XToys more like a live execution engine than a pattern launcher.
+
+That would let Lumiverse:
+
+- directly vary intensity over time
+- directly vary ramp behavior over time
+- modulate multiple mechanical axes continuously
+- own fades, holds, releases, and ongoing transitions explicitly
+
+This would provide the richest semantic fidelity, but it also means Lumiverse must own much more runtime responsibility, including active persistence and ramp-down behavior.
 
 ## Mechanical Execution Profiles
 
@@ -1280,6 +1299,8 @@ For now, the preferred architecture is:
 
 - Lumiverse = narrative parser and sequence planner
 - XToys = tactile execution runtime
+
+For v1 specifically, the preferred XToys execution model should be quantized pattern dispatch using semantic base names plus `low`, `medium`, and `high` intensity bands.
 
 ## Safety and Comfort
 
@@ -1422,6 +1443,22 @@ Later versions may support richer parallel blending when:
 - the user has calibrated multi-toy or multi-channel output
 - the XToys script explicitly supports concurrent routed actions
 - real testing confirms the felt result is believable rather than muddy or contradictory
+
+### Direct Scripted Axis Modulation
+
+XToys appears capable of live modulation through repeated webhook-driven updates, but v1 does not need to depend on that model yet.
+
+Although this is likely the most powerful long-term integration path, it should be treated as deferred until:
+
+- the quantized v1 path is stable on real devices
+- Lumiverse-side persistence and ramp scheduling are proven reliable over longer sessions
+- multi-axis execution behavior is validated in actual XToys setups
+
+For now:
+
+- Lumiverse should quantize beats into `low`, `medium`, and `high` XToys action variants
+- XToys should own the local prebuilt pattern or action behavior behind each quantized trigger
+- fully continuous axis modulation should remain a later feature
 
 ## Potential Issues
 

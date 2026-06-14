@@ -231,10 +231,31 @@ export interface SchedulerState {
   activeBeatStartedAt: string | null
   playbackCycle: number
   lastCompletionReason: 'completed' | 'stopped' | 'replaced' | 'panic_stop' | null
+  lastDispatchKind: 'beat' | 'control' | null
+  lastDispatchAction: string | null
+  lastDispatchAt: string | null
+  lastDispatchStatus: 'ok' | 'error' | null
+  lastDispatchError: string | null
+}
+
+export interface XToysDeliverySettings {
+  enabled: boolean
+  mode: 'action_trigger_compat'
+  privateWebhookId: string
+  webhookBaseUrl: string
+  requestTimeoutMs: number
+  stopActionName: string
+  holdActionName: string
+  resumeActionName: string
+  panicStopActionName: string
+  triggerFieldName: string
+  intensityFieldName: string
+  rampSecondsFieldName: string
 }
 
 export interface UserSettings {
   parser: ParserConnectionSettings
+  xtoysDelivery: XToysDeliverySettings
   xtoysActionMappings: XToysActionMappingSettings[]
   actionCalibrationPresets: ActionCalibrationPreset[]
 }
@@ -348,6 +369,20 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
     deactivationThreshold: 3,
     fallbackBehavior: 'default_connection',
   },
+  xtoysDelivery: {
+    enabled: false,
+    mode: 'action_trigger_compat',
+    privateWebhookId: '',
+    webhookBaseUrl: 'https://webhook.xtoys.app',
+    requestTimeoutMs: 8000,
+    stopActionName: 'stop',
+    holdActionName: 'hold',
+    resumeActionName: 'resume',
+    panicStopActionName: 'panicstop',
+    triggerFieldName: 'action',
+    intensityFieldName: 'intensity',
+    rampSecondsFieldName: 'seconds',
+  },
   xtoysActionMappings: [],
   actionCalibrationPresets: [],
 }
@@ -403,6 +438,11 @@ export const DEFAULT_SCHEDULER_STATE: SchedulerState = {
   activeBeatStartedAt: null,
   playbackCycle: 0,
   lastCompletionReason: null,
+  lastDispatchKind: null,
+  lastDispatchAction: null,
+  lastDispatchAt: null,
+  lastDispatchStatus: null,
+  lastDispatchError: null,
 }
 
 export const DEFAULT_HELD_STATE: HeldState = {

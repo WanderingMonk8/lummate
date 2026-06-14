@@ -41,9 +41,9 @@ const CALIBRATION_EXECUTION_PROFILES = [
 ] as const
 
 const SHOW_PHASE4_DEBUG = false
-const SHOW_PHASE5_DEBUG = true
-const SHOW_PHASE6_DEBUG = true
-const SHOW_PHASE7_DEBUG = true
+const SHOW_PHASE5_DEBUG = false
+const SHOW_PHASE6_DEBUG = false
+const SHOW_PHASE7_DEBUG = false
 
 const CONTROL_SELECTOR = '.lummate-phase1-control'
 const ACTION_ROW_SELECTORS = [
@@ -949,7 +949,7 @@ export function setup(ctx: SpindleFrontendContext) {
         heldNode.textContent = `Held: ${currentHeldState?.actionFamily ?? 'none'} @ ${currentHeldState?.contactZone ?? 'none'}`
       }
       if (schedulerNode) {
-        schedulerNode.textContent = `Scheduler: ${currentSchedulerState?.status ?? 'none'} / plan: ${currentSchedulerState?.activePlanMessageId ?? 'none'} / beat: ${currentSchedulerState?.activeBeatIndex ?? 'none'} / cycle: ${currentSchedulerState?.playbackCycle ?? 0} / reason: ${currentSchedulerState?.lastCompletionReason ?? 'none'}`
+        schedulerNode.textContent = `Scheduler: ${currentSchedulerState?.status ?? 'none'} / plan: ${currentSchedulerState?.activePlanMessageId ?? 'none'} / beat: ${currentSchedulerState?.activeBeatIndex ?? 'none'} / cycle: ${currentSchedulerState?.playbackCycle ?? 0} / reason: ${currentSchedulerState?.lastCompletionReason ?? 'none'} / dispatch: ${currentSchedulerState?.lastDispatchKind ?? 'none'}:${currentSchedulerState?.lastDispatchAction ?? 'none'} (${currentSchedulerState?.lastDispatchStatus ?? 'none'})`
       }
       if (semanticNode) {
         semanticNode.textContent = formatSemanticBeats(currentPlan)
@@ -1062,6 +1062,7 @@ export function setup(ctx: SpindleFrontendContext) {
   function cloneSettings(settings: UserSettings): UserSettings {
     return {
       parser: { ...settings.parser },
+      xtoysDelivery: { ...settings.xtoysDelivery },
       xtoysActionMappings: settings.xtoysActionMappings.map((mapping) => ({ ...mapping })),
       actionCalibrationPresets: settings.actionCalibrationPresets.map((preset) => ({ ...preset })),
     }
@@ -1461,11 +1462,178 @@ export function setup(ctx: SpindleFrontendContext) {
     profileSection.appendChild(profileGrid)
     root.appendChild(profileSection)
 
+    const deliverySection = document.createElement('section')
+    deliverySection.className = 'lummate-settings-section'
+    deliverySection.innerHTML = `
+      <h3>XToys Delivery</h3>
+      <p>XToys private webhooks use a saved Webhook ID. Lummate sends one beat or control event at a time using action-trigger compatibility, with semantic actions quantized to <code>-low</code>, <code>-medium</code>, or <code>-high</code> suffixes.</p>
+    `
+
+    const deliveryGrid = document.createElement('div')
+    deliveryGrid.className = 'lummate-settings-grid'
+    deliverySection.appendChild(deliveryGrid)
+
+    const deliveryEnabledMount = createField(deliveryGrid, 'Enable XToys delivery')
+    registerSettingsComponent(
+      ctx.components.mountSwitch(deliveryEnabledMount, {
+        checked: draftSettings.xtoysDelivery.enabled,
+        ariaLabel: 'Enable XToys webhook delivery',
+        onChange: (checked) => {
+          if (!draftSettings) return
+          draftSettings.xtoysDelivery.enabled = checked
+          setSettingsStatus('Unsaved changes')
+        },
+      }),
+    )
+
+    const webhookIdMount = createField(deliveryGrid, 'Private webhook ID')
+    registerSettingsComponent(
+      ctx.components.mountTextInput(webhookIdMount, {
+        value: draftSettings.xtoysDelivery.privateWebhookId,
+        placeholder: 'Example: ABCD1234',
+        ariaLabel: 'XToys private webhook ID',
+        onChange: (value) => {
+          if (!draftSettings) return
+          draftSettings.xtoysDelivery.privateWebhookId = value.trim()
+          setSettingsStatus('Unsaved changes')
+        },
+      }),
+    )
+
+    const baseUrlMount = createField(deliveryGrid, 'Webhook base URL')
+    registerSettingsComponent(
+      ctx.components.mountTextInput(baseUrlMount, {
+        value: draftSettings.xtoysDelivery.webhookBaseUrl,
+        placeholder: 'https://webhook.xtoys.app',
+        ariaLabel: 'XToys webhook base URL',
+        onChange: (value) => {
+          if (!draftSettings) return
+          draftSettings.xtoysDelivery.webhookBaseUrl = value.trim() || 'https://webhook.xtoys.app'
+          setSettingsStatus('Unsaved changes')
+        },
+      }),
+    )
+
+    const timeoutMount = createField(deliveryGrid, 'Request timeout (ms)')
+    registerSettingsComponent(
+      ctx.components.mountNumberStepper(timeoutMount, {
+        value: draftSettings.xtoysDelivery.requestTimeoutMs,
+        min: 1000,
+        max: 30000,
+        step: 500,
+        onChange: (value) => {
+          if (!draftSettings || value == null) return
+          draftSettings.xtoysDelivery.requestTimeoutMs = value
+          setSettingsStatus('Unsaved changes')
+        },
+      }),
+    )
+
+    const triggerFieldMount = createField(deliveryGrid, 'Trigger field name')
+    registerSettingsComponent(
+      ctx.components.mountTextInput(triggerFieldMount, {
+        value: draftSettings.xtoysDelivery.triggerFieldName,
+        placeholder: 'action',
+        ariaLabel: 'XToys trigger field name',
+        onChange: (value) => {
+          if (!draftSettings) return
+          draftSettings.xtoysDelivery.triggerFieldName = value.trim() || 'action'
+          setSettingsStatus('Unsaved changes')
+        },
+      }),
+    )
+
+    const intensityFieldMount = createField(deliveryGrid, 'Intensity field name')
+    registerSettingsComponent(
+      ctx.components.mountTextInput(intensityFieldMount, {
+        value: draftSettings.xtoysDelivery.intensityFieldName,
+        placeholder: 'intensity',
+        ariaLabel: 'XToys intensity field name',
+        onChange: (value) => {
+          if (!draftSettings) return
+          draftSettings.xtoysDelivery.intensityFieldName = value.trim() || 'intensity'
+          setSettingsStatus('Unsaved changes')
+        },
+      }),
+    )
+
+    const rampFieldMount = createField(deliveryGrid, 'Ramp seconds field name')
+    registerSettingsComponent(
+      ctx.components.mountTextInput(rampFieldMount, {
+        value: draftSettings.xtoysDelivery.rampSecondsFieldName,
+        placeholder: 'seconds',
+        ariaLabel: 'XToys ramp seconds field name',
+        onChange: (value) => {
+          if (!draftSettings) return
+          draftSettings.xtoysDelivery.rampSecondsFieldName = value.trim() || 'seconds'
+          setSettingsStatus('Unsaved changes')
+        },
+      }),
+    )
+
+    const stopActionMount = createField(deliveryGrid, 'Stop action name')
+    registerSettingsComponent(
+      ctx.components.mountTextInput(stopActionMount, {
+        value: draftSettings.xtoysDelivery.stopActionName,
+        placeholder: 'stop',
+        ariaLabel: 'XToys stop action name',
+        onChange: (value) => {
+          if (!draftSettings) return
+          draftSettings.xtoysDelivery.stopActionName = value.trim() || 'stop'
+          setSettingsStatus('Unsaved changes')
+        },
+      }),
+    )
+
+    const holdActionMount = createField(deliveryGrid, 'Hold action name')
+    registerSettingsComponent(
+      ctx.components.mountTextInput(holdActionMount, {
+        value: draftSettings.xtoysDelivery.holdActionName,
+        placeholder: 'hold',
+        ariaLabel: 'XToys hold action name',
+        onChange: (value) => {
+          if (!draftSettings) return
+          draftSettings.xtoysDelivery.holdActionName = value.trim() || 'hold'
+          setSettingsStatus('Unsaved changes')
+        },
+      }),
+    )
+
+    const resumeActionMount = createField(deliveryGrid, 'Resume action name')
+    registerSettingsComponent(
+      ctx.components.mountTextInput(resumeActionMount, {
+        value: draftSettings.xtoysDelivery.resumeActionName,
+        placeholder: 'resume',
+        ariaLabel: 'XToys resume action name',
+        onChange: (value) => {
+          if (!draftSettings) return
+          draftSettings.xtoysDelivery.resumeActionName = value.trim() || 'resume'
+          setSettingsStatus('Unsaved changes')
+        },
+      }),
+    )
+
+    const panicActionMount = createField(deliveryGrid, 'Panic-stop action name')
+    registerSettingsComponent(
+      ctx.components.mountTextInput(panicActionMount, {
+        value: draftSettings.xtoysDelivery.panicStopActionName,
+        placeholder: 'panicstop',
+        ariaLabel: 'XToys panic stop action name',
+        onChange: (value) => {
+          if (!draftSettings) return
+          draftSettings.xtoysDelivery.panicStopActionName = value.trim() || 'panicstop'
+          setSettingsStatus('Unsaved changes')
+        },
+      }),
+    )
+
+    root.appendChild(deliverySection)
+
     const mappingsSection = document.createElement('section')
     mappingsSection.className = 'lummate-settings-section'
     mappingsSection.innerHTML = `
       <h3>XToys Action Mapping</h3>
-      <p>Each semantic action type maps to an XToys action name defined inside your own XToys webhook script.</p>
+      <p>Each semantic action type maps to a base XToys action name. Lummate will automatically emit <code>name-low</code>, <code>name-medium</code>, or <code>name-high</code> based on the resolved beat intensity.</p>
     `
 
     for (const mapping of draftSettings.xtoysActionMappings) {

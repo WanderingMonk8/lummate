@@ -27,7 +27,7 @@ interface ChatTrackingPreferenceStore {
 function buildDefaultActionMappings(): XToysActionMappingSettings[] {
   return ALL_ACTION_TYPES.map((semanticActionType) => ({
     semanticActionType,
-    xtoysActionName: '',
+    xtoysActionName: semanticActionType,
     fallbackActionName: null,
     supported: semanticActionType !== 'pause',
     updatedAt: null,
@@ -59,10 +59,14 @@ function mergeSettings(settings: UserSettings): UserSettings {
     (settings.actionCalibrationPresets ?? []).map((preset) => [preset.semanticActionType, preset]),
   )
 
-  return {
+  const merged: UserSettings = {
     parser: {
       ...DEFAULT_USER_SETTINGS.parser,
       ...settings.parser,
+    },
+    xtoysDelivery: {
+      ...DEFAULT_USER_SETTINGS.xtoysDelivery,
+      ...settings.xtoysDelivery,
     },
     xtoysActionMappings: buildDefaultActionMappings().map((mapping) => ({
       ...mapping,
@@ -73,6 +77,15 @@ function mergeSettings(settings: UserSettings): UserSettings {
       ...calibrationsByType.get(preset.semanticActionType),
     })),
   }
+
+  // Migrate the earlier compatibility-mode default to the field name XToys actually reacts to.
+  merged.xtoysDelivery.mode = 'action_trigger_compat'
+
+  if (merged.xtoysDelivery.triggerFieldName === 'sendTrigger') {
+    merged.xtoysDelivery.triggerFieldName = 'action'
+  }
+
+  return merged
 }
 
 function mergeChatTrackingPreferences(

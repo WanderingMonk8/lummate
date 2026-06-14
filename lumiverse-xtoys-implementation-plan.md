@@ -286,7 +286,8 @@ Deliverables:
 - XToys webhook client
 - backend request wrapper
 - payload builder
-- user-defined XToys action-name dispatch
+- user-defined XToys base action-name dispatch
+- quantized `low` / `medium` / `high` beat-level trigger resolution
 - stop / hold / resume command emission
 - logging and error reporting
 

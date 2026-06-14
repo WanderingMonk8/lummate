@@ -358,6 +358,57 @@ async function finalizePlayback(
     runtime.previousHeldState,
     completionAt,
   )
+  const settings = await readUserSettings(spindle, userId)
+  let dispatchActionName: string | null = null
+  let dispatchResult: { ok: true } | { ok: false; error: string } | null = null
+
+  if (reason === 'stopped') {
+    dispatchActionName = settings.xtoysDelivery.stopActionName
+    dispatchResult = await postXtowsPayload(
+      userId,
+      settings,
+      buildXtowsControlPayload(settings, dispatchActionName, 'stop', {
+        reason,
+        message_id: runtime.plan.messageId,
+      }),
+    )
+  } else if (reason === 'panic_stop') {
+    dispatchActionName = settings.xtoysDelivery.panicStopActionName
+    dispatchResult = await postXtowsPayload(
+      userId,
+      settings,
+      buildXtowsControlPayload(settings, dispatchActionName, 'panic_stop', {
+        reason,
+        message_id: runtime.plan.messageId,
+      }),
+    )
+  } else if (runtime.plan.endResolution === 'hold_new_final') {
+    dispatchActionName = settings.xtoysDelivery.holdActionName
+    dispatchResult = await postXtowsPayload(
+      userId,
+      settings,
+      buildXtowsControlPayload(settings, dispatchActionName, 'hold', {
+        message_id: runtime.plan.messageId,
+        contact_zone: runtime.contactZone,
+        held_action_type: nextHeldState.actionFamily,
+        amplitude: nextHeldState.strength,
+        tempo: nextHeldState.frequency,
+      }),
+    )
+  } else if (runtime.plan.endResolution === 'resume_previous_held' && runtime.previousHeldState.actionFamily) {
+    dispatchActionName = settings.xtoysDelivery.resumeActionName
+    dispatchResult = await postXtowsPayload(
+      userId,
+      settings,
+      buildXtowsControlPayload(settings, dispatchActionName, 'resume', {
+        message_id: runtime.plan.messageId,
+        contact_zone: runtime.previousHeldState.contactZone,
+        resumed_action_type: runtime.previousHeldState.actionFamily,
+        amplitude: runtime.previousHeldState.strength,
+        tempo: runtime.previousHeldState.frequency,
+      }),
+    )
+  }
 
   const shouldRemainHeld = runtime.plan.endResolution === 'hold_new_final'
   const nextScheduler: SchedulerState =
@@ -369,11 +420,21 @@ async function finalizePlayback(
           activeBeatStartedAt: completionAt,
           playbackCycle: Math.max(session.scheduler.playbackCycle, 1),
           lastCompletionReason: reason,
+          lastDispatchKind: dispatchActionName ? 'control' : session.scheduler.lastDispatchKind,
+          lastDispatchAction: dispatchActionName ?? session.scheduler.lastDispatchAction,
+          lastDispatchAt: dispatchActionName ? completionAt : session.scheduler.lastDispatchAt,
+          lastDispatchStatus: dispatchResult ? (dispatchResult.ok ? 'ok' : 'error') : session.scheduler.lastDispatchStatus,
+          lastDispatchError: dispatchResult && !dispatchResult.ok ? dispatchResult.error : null,
         }
       : {
           ...DEFAULT_SCHEDULER_STATE,
           status: reason === 'completed' ? 'idle' : 'stopped',
           lastCompletionReason: reason,
+          lastDispatchKind: dispatchActionName ? 'control' : null,
+          lastDispatchAction: dispatchActionName,
+          lastDispatchAt: dispatchActionName ? completionAt : null,
+          lastDispatchStatus: dispatchResult ? (dispatchResult.ok ? 'ok' : 'error') : null,
+          lastDispatchError: dispatchResult && !dispatchResult.ok ? dispatchResult.error : null,
         }
 
   const nextSession: SessionState = {
@@ -411,16 +472,29 @@ async function advancePlayback(userId: string, sequenceId: number): Promise<void
 
   if (nextIndex >= orderedBeats.length) {
     if (runtime.plan.endResolution === 'loop_current_plan' && orderedBeats.length > 0) {
+      const firstBeat = orderedBeats[0]
+      const settings = await readUserSettings(spindle, userId)
+      const dispatchResult = await postXtowsPayload(
+        userId,
+        settings,
+        buildXtowsBeatPayload(runtime.plan, firstBeat, 0, runtime.contactZone, settings),
+      )
       const nextSession: SessionState = {
         ...session,
         lastUpdatedAt: advancedAt,
         scheduler: {
+          ...session.scheduler,
           status: 'looping',
           activePlanMessageId: runtime.plan.messageId,
           activeBeatIndex: 0,
           activeBeatStartedAt: advancedAt,
           playbackCycle: Math.max(session.scheduler.playbackCycle, 1) + 1,
           lastCompletionReason: null,
+          lastDispatchKind: 'beat',
+          lastDispatchAction: firstBeat.xtoysActionName || firstBeat.actionType,
+          lastDispatchAt: advancedAt,
+          lastDispatchStatus: dispatchResult.ok ? 'ok' : 'error',
+          lastDispatchError: dispatchResult.ok ? null : dispatchResult.error,
         },
       }
 
@@ -434,6 +508,16 @@ async function advancePlayback(userId: string, sequenceId: number): Promise<void
     return
   }
 
+  const settings = await readUserSettings(spindle, userId)
+  const nextBeat = orderedBeats[nextIndex]
+  const dispatchResult = nextBeat
+    ? await postXtowsPayload(
+        userId,
+        settings,
+        buildXtowsBeatPayload(runtime.plan, nextBeat, nextIndex, runtime.contactZone, settings),
+      )
+    : { ok: true as const }
+
   const nextSession: SessionState = {
     ...session,
     lastUpdatedAt: advancedAt,
@@ -445,6 +529,11 @@ async function advancePlayback(userId: string, sequenceId: number): Promise<void
       activeBeatStartedAt: advancedAt,
       playbackCycle: Math.max(session.scheduler.playbackCycle, 1),
       lastCompletionReason: null,
+      lastDispatchKind: nextBeat ? 'beat' : session.scheduler.lastDispatchKind,
+      lastDispatchAction: nextBeat ? nextBeat.xtoysActionName || nextBeat.actionType : session.scheduler.lastDispatchAction,
+      lastDispatchAt: nextBeat ? advancedAt : session.scheduler.lastDispatchAt,
+      lastDispatchStatus: nextBeat ? (dispatchResult.ok ? 'ok' : 'error') : session.scheduler.lastDispatchStatus,
+      lastDispatchError: nextBeat && !dispatchResult.ok ? dispatchResult.error : null,
     },
   }
 
@@ -487,6 +576,15 @@ async function startPlaybackScheduler(
   const session = getRuntimeSession(userId)
   const startedAt = new Date().toISOString()
   const sequenceId = ++playbackSequenceCounter
+  const firstBeat = getOrderedResolvedBeats(plan)[0] ?? null
+  const settings = await readUserSettings(spindle, userId)
+  const dispatchResult = firstBeat
+    ? await postXtowsPayload(
+        userId,
+        settings,
+        buildXtowsBeatPayload(plan, firstBeat, 0, contactZone, settings),
+      )
+    : { ok: true as const }
   const nextSession: SessionState = {
     ...session,
     activeChatId: chatId,
@@ -501,6 +599,11 @@ async function startPlaybackScheduler(
       activeBeatStartedAt: startedAt,
       playbackCycle: 1,
       lastCompletionReason: null,
+      lastDispatchKind: firstBeat ? 'beat' : null,
+      lastDispatchAction: firstBeat ? firstBeat.xtoysActionName || firstBeat.actionType : null,
+      lastDispatchAt: firstBeat ? startedAt : null,
+      lastDispatchStatus: firstBeat ? (dispatchResult.ok ? 'ok' : 'error') : null,
+      lastDispatchError: firstBeat && !dispatchResult.ok ? dispatchResult.error : null,
     },
     parserSession: {
       ...session.parserSession,
@@ -1662,9 +1765,142 @@ function buildUpdatedSettings(current: UserSettings, incoming: UserSettings): Us
       ...current.parser,
       ...incoming.parser,
     },
+    xtoysDelivery: {
+      ...current.xtoysDelivery,
+      ...incoming.xtoysDelivery,
+    },
     xtoysActionMappings: incoming.xtoysActionMappings,
     actionCalibrationPresets: incoming.actionCalibrationPresets,
   }
+}
+
+function sanitizeXtowsBaseUrl(baseUrl: string): string {
+  const trimmed = baseUrl.trim()
+  return trimmed.replace(/\/+$/, '') || 'https://webhook.xtoys.app'
+}
+
+function buildXtowsWebhookUrl(settings: UserSettings): string | null {
+  const webhookId = settings.xtoysDelivery.privateWebhookId.trim()
+  if (!webhookId) return null
+  return `${sanitizeXtowsBaseUrl(settings.xtoysDelivery.webhookBaseUrl)}/${encodeURIComponent(webhookId)}`
+}
+
+async function postXtowsPayload(
+  userId: string,
+  settings: UserSettings,
+  payload: Record<string, unknown>,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!settings.xtoysDelivery.enabled) {
+    return { ok: true }
+  }
+
+  const url = buildXtowsWebhookUrl(settings)
+  if (!url) {
+    return { ok: false, error: 'XToys delivery is enabled but no private webhook ID is configured.' }
+  }
+
+  if (typeof fetch !== 'function') {
+    return { ok: false, error: 'Fetch is unavailable in the Lumiverse backend runtime.' }
+  }
+
+  const controller = new AbortController()
+  const timeout = setTimeout(
+    () => controller.abort(),
+    Math.max(1000, settings.xtoysDelivery.requestTimeoutMs),
+  )
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    })
+
+    if (!response.ok) {
+      return { ok: false, error: `XToys webhook returned ${response.status} ${response.statusText}`.trim() }
+    }
+
+    spindle.log.info(`Lummate dispatched XToys webhook event for user ${userId}: ${String(payload.action ?? 'unknown')}`)
+    return { ok: true }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    spindle.log.warn(`Lummate XToys webhook dispatch failed for user ${userId}: ${message}`)
+    return { ok: false, error: message }
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
+function buildXtowsBeatPayload(
+  plan: MessagePlan,
+  beat: ResolvedBeat,
+  beatIndex: number,
+  contactZone: UserContactZone,
+  settings: UserSettings,
+): Record<string, unknown> {
+  const level = resolveXtowsIntensityLevel(beat.amplitude)
+  const payload: Record<string, unknown> = {}
+  payload[settings.xtoysDelivery.triggerFieldName] = buildXtowsLeveledActionName(
+    beat.xtoysActionName || beat.actionType,
+    level,
+  )
+  payload[settings.xtoysDelivery.intensityFieldName] = clamp(Math.round(beat.amplitude), 0, 100)
+  payload[settings.xtoysDelivery.rampSecondsFieldName] = resolveXtowsRampSeconds(beat)
+  payload.kind = 'beat'
+  payload.message_id = plan.messageId
+  payload.beat_index = beatIndex
+  payload.order_index = beat.orderIndex
+  payload.semantic_action_type = beat.actionType
+  payload.contact_zone = contactZone
+  payload.transition_style = beat.transitionStyle
+  payload.execution_profile = beat.executionProfile
+  payload.duration_ms = beat.durationMs
+  payload.tempo = beat.tempo
+  payload.intensity_level = level
+  return payload
+}
+
+function buildXtowsControlPayload(
+  settings: UserSettings,
+  actionName: string,
+  control: 'stop' | 'hold' | 'resume' | 'panic_stop',
+  details: Record<string, unknown> = {},
+): Record<string, unknown> {
+  const payload: Record<string, unknown> = {}
+  payload[settings.xtoysDelivery.triggerFieldName] = actionName
+  payload.kind = 'control'
+  payload.control = control
+  for (const key of Object.keys(details)) {
+    payload[key] = details[key]
+  }
+  return payload
+}
+
+function resolveXtowsRampSeconds(beat: ResolvedBeat): number {
+  if (beat.transitionStyle === 'snap') return 0
+  if (beat.transitionStyle === 'pulse') return 0.1
+  if (beat.transitionStyle === 'ramp') return 0.35
+  if (beat.transitionStyle === 'fade') return 0.6
+
+  const normalizedTempo = clamp(beat.tempo, 0, 100)
+  const derived = 0.6 - normalizedTempo * 0.005
+  return Math.max(0.05, Math.min(0.6, Math.round(derived * 100) / 100))
+}
+
+function resolveXtowsIntensityLevel(amplitude: number): 'low' | 'medium' | 'high' {
+  const normalized = clamp(Math.round(amplitude), 0, 100)
+  if (normalized >= 70) return 'high'
+  if (normalized >= 40) return 'medium'
+  return 'low'
+}
+
+function buildXtowsLeveledActionName(baseActionName: string, level: 'low' | 'medium' | 'high'): string {
+  const trimmed = baseActionName.trim() || 'stroke'
+  const normalizedBase = trimmed.replace(/-(low|medium|high)$/i, '')
+  return `${normalizedBase}-${level}`
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -3306,7 +3542,7 @@ async function buildMessagePlan(
   const allowGenericHeuristicFallback =
     chatPreferences.primaryContactZone === 'genitals' || deterministicZoneBeats.length > 0
 
-  const semanticBeats: SemanticBeat[] =
+  const rawSemanticBeats: SemanticBeat[] =
     parsedScene?.relevant && sortedLlmBeats.length > 0
       ? sortedLlmBeats.map((beat, index) => {
           const durationClass = normalizeDurationClass(beat.duration_class)
@@ -3395,6 +3631,13 @@ async function buildMessagePlan(
         ]
         : []
 
+  const semanticBeats: SemanticBeat[] = [...rawSemanticBeats]
+    .sort((left, right) => left.orderIndex - right.orderIndex)
+    .map((beat, index) => ({
+      ...beat,
+      orderIndex: index,
+    }))
+
   const participantStates =
     parsedScene != null
       ? mapLlmParticipantsToAssignments(
@@ -3469,9 +3712,7 @@ async function buildMessagePlan(
     }
   })
 
-  const terminalSemanticBeat = [...semanticBeats]
-    .sort((left, right) => left.orderIndex - right.orderIndex)
-    .at(-1) ?? null
+  const terminalSemanticBeat = semanticBeats.at(-1) ?? null
   const continuityVerdict =
     parsedScene?.relevant && parsedScene.continuity_verdict != null
       ? parsedScene.continuity_verdict
@@ -3578,6 +3819,7 @@ async function handleFrontendMessage(
           continuityMemoryPatch = controllerResult.continuityMemoryPatch
           plannedHeldState = controllerResult.heldState
           nextScheduler = {
+            ...DEFAULT_SCHEDULER_STATE,
             status: 'playing',
             activePlanMessageId: payload.payload.messageId,
             activeBeatIndex: 0,
@@ -3586,6 +3828,14 @@ async function handleFrontendMessage(
             lastCompletionReason: null,
           }
         } else if (current.activeMessageId === payload.payload.messageId) {
+          const stopDispatch = await postXtowsPayload(
+            userId,
+            settings,
+            buildXtowsControlPayload(settings, settings.xtoysDelivery.stopActionName, 'stop', {
+              reason: 'manual_stop',
+              message_id: payload.payload.messageId,
+            }),
+          )
           cancelPlaybackRuntime(userId)
           nextHeldState = { ...DEFAULT_SESSION_STATE.heldState }
           currentHeldStateRef = null
@@ -3593,6 +3843,11 @@ async function handleFrontendMessage(
             ...DEFAULT_SCHEDULER_STATE,
             status: 'stopped',
             lastCompletionReason: 'stopped',
+            lastDispatchKind: 'control',
+            lastDispatchAction: settings.xtoysDelivery.stopActionName,
+            lastDispatchAt: new Date().toISOString(),
+            lastDispatchStatus: stopDispatch.ok ? 'ok' : 'error',
+            lastDispatchError: stopDispatch.ok ? null : stopDispatch.error,
           }
         }
 
@@ -3703,6 +3958,7 @@ async function handleFrontendMessage(
             },
           },
           scheduler: {
+            ...DEFAULT_SCHEDULER_STATE,
             status: 'playing',
             activePlanMessageId: payload.payload.messageId,
             activeBeatIndex: 0,
@@ -3769,6 +4025,7 @@ async function handleFrontendMessage(
           continuityMemoryPatch = controllerResult.continuityMemoryPatch
           plannedHeldState = controllerResult.heldState
           nextScheduler = {
+            ...DEFAULT_SCHEDULER_STATE,
             status: 'playing',
             activePlanMessageId: payload.payload.messageId,
             activeBeatIndex: 0,

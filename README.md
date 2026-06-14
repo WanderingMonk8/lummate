@@ -4,7 +4,7 @@ Lummate is a Lumiverse extension that turns erotic roleplay scenes into tactile 
 
 Instead of firing blindly on every message, Lummate reads the scene, figures out who is involved, identifies the relevant contact, builds a beat-by-beat action plan, and sends the result to XToys in a form that can actually be used in real setups.
 
-## [Highlights](https://github.com/WanderingMonk8/lummate#highlights)
+## Highlights
 
 - **On-demand tactile playback**
   Add a `Play / Stop` control directly to Lumiverse messages and trigger tactile playback only when you want it.

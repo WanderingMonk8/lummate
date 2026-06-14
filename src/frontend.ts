@@ -44,6 +44,7 @@ const SHOW_PHASE4_DEBUG = false
 const SHOW_PHASE5_DEBUG = false
 const SHOW_PHASE6_DEBUG = false
 const SHOW_PHASE7_DEBUG = false
+const SHOW_XTOYS_ACTION_MAPPING_SETTINGS = false
 
 const CONTROL_SELECTOR = '.lummate-phase1-control'
 const ACTION_ROW_SELECTORS = [
@@ -1629,76 +1630,78 @@ export function setup(ctx: SpindleFrontendContext) {
 
     root.appendChild(deliverySection)
 
-    const mappingsSection = document.createElement('section')
-    mappingsSection.className = 'lummate-settings-section'
-    mappingsSection.innerHTML = `
-      <h3>XToys Action Mapping</h3>
-      <p>Each semantic action type maps to a base XToys action name. Lummate will automatically emit <code>name-low</code>, <code>name-medium</code>, or <code>name-high</code> based on the resolved beat intensity.</p>
-    `
+    if (SHOW_XTOYS_ACTION_MAPPING_SETTINGS) {
+      const mappingsSection = document.createElement('section')
+      mappingsSection.className = 'lummate-settings-section'
+      mappingsSection.innerHTML = `
+        <h3>XToys Action Mapping</h3>
+        <p>Each semantic action type maps to a base XToys action name. Lummate will automatically emit <code>name-low</code>, <code>name-medium</code>, or <code>name-high</code> based on the resolved beat intensity.</p>
+      `
 
-    for (const mapping of draftSettings.xtoysActionMappings) {
-      const row = document.createElement('div')
-      row.className = 'lummate-mapping-row'
+      for (const mapping of draftSettings.xtoysActionMappings) {
+        const row = document.createElement('div')
+        row.className = 'lummate-mapping-row'
 
-      const typeCell = document.createElement('div')
-      typeCell.className = 'lummate-mapping-type'
-      typeCell.textContent = mapping.semanticActionType
-      row.appendChild(typeCell)
+        const typeCell = document.createElement('div')
+        typeCell.className = 'lummate-mapping-type'
+        typeCell.textContent = mapping.semanticActionType
+        row.appendChild(typeCell)
 
-      const actionMount = document.createElement('div')
-      row.appendChild(actionMount)
-      registerSettingsComponent(
-        ctx.components.mountTextInput(actionMount, {
-          value: mapping.xtoysActionName,
-          placeholder: 'XToys action name',
-          ariaLabel: `${mapping.semanticActionType} XToys action name`,
-          onChange: (value) => {
-            const target = findMappingDraft(mapping.semanticActionType)
-            if (!target) return
-            target.xtoysActionName = value.trim()
-            target.updatedAt = new Date().toISOString()
-            setSettingsStatus('Unsaved changes')
-          },
-        }),
-      )
+        const actionMount = document.createElement('div')
+        row.appendChild(actionMount)
+        registerSettingsComponent(
+          ctx.components.mountTextInput(actionMount, {
+            value: mapping.xtoysActionName,
+            placeholder: 'XToys action name',
+            ariaLabel: `${mapping.semanticActionType} XToys action name`,
+            onChange: (value) => {
+              const target = findMappingDraft(mapping.semanticActionType)
+              if (!target) return
+              target.xtoysActionName = value.trim()
+              target.updatedAt = new Date().toISOString()
+              setSettingsStatus('Unsaved changes')
+            },
+          }),
+        )
 
-      const fallbackActionMount = document.createElement('div')
-      row.appendChild(fallbackActionMount)
-      registerSettingsComponent(
-        ctx.components.mountTextInput(fallbackActionMount, {
-          value: mapping.fallbackActionName ?? '',
-          placeholder: 'Fallback action name (optional)',
-          ariaLabel: `${mapping.semanticActionType} fallback XToys action name`,
-          onChange: (value) => {
-            const target = findMappingDraft(mapping.semanticActionType)
-            if (!target) return
-            target.fallbackActionName = value.trim() || null
-            target.updatedAt = new Date().toISOString()
-            setSettingsStatus('Unsaved changes')
-          },
-        }),
-      )
+        const fallbackActionMount = document.createElement('div')
+        row.appendChild(fallbackActionMount)
+        registerSettingsComponent(
+          ctx.components.mountTextInput(fallbackActionMount, {
+            value: mapping.fallbackActionName ?? '',
+            placeholder: 'Fallback action name (optional)',
+            ariaLabel: `${mapping.semanticActionType} fallback XToys action name`,
+            onChange: (value) => {
+              const target = findMappingDraft(mapping.semanticActionType)
+              if (!target) return
+              target.fallbackActionName = value.trim() || null
+              target.updatedAt = new Date().toISOString()
+              setSettingsStatus('Unsaved changes')
+            },
+          }),
+        )
 
-      const supportMount = document.createElement('div')
-      row.appendChild(supportMount)
-      registerSettingsComponent(
-        ctx.components.mountSwitch(supportMount, {
-          checked: mapping.supported,
-          ariaLabel: `${mapping.semanticActionType} supported`,
-          onChange: (checked) => {
-            const target = findMappingDraft(mapping.semanticActionType)
-            if (!target) return
-            target.supported = checked
-            target.updatedAt = new Date().toISOString()
-            setSettingsStatus('Unsaved changes')
-          },
-        }),
-      )
+        const supportMount = document.createElement('div')
+        row.appendChild(supportMount)
+        registerSettingsComponent(
+          ctx.components.mountSwitch(supportMount, {
+            checked: mapping.supported,
+            ariaLabel: `${mapping.semanticActionType} supported`,
+            onChange: (checked) => {
+              const target = findMappingDraft(mapping.semanticActionType)
+              if (!target) return
+              target.supported = checked
+              target.updatedAt = new Date().toISOString()
+              setSettingsStatus('Unsaved changes')
+            },
+          }),
+        )
 
-      mappingsSection.appendChild(row)
+        mappingsSection.appendChild(row)
+      }
+
+      root.appendChild(mappingsSection)
     }
-
-    root.appendChild(mappingsSection)
 
     const calibrationSection = document.createElement('section')
     calibrationSection.className = 'lummate-settings-section'

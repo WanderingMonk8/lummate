@@ -474,10 +474,10 @@ async function advancePlayback(userId: string, sequenceId: number): Promise<void
     if (runtime.plan.endResolution === 'loop_current_plan' && orderedBeats.length > 0) {
       const firstBeat = orderedBeats[0]
       const settings = await readUserSettings(spindle, userId)
-      const dispatchResult = await postXtowsPayload(
+      const dispatchResult = await postXtowsBeatPayloads(
         userId,
         settings,
-        buildXtowsBeatPayload(runtime.plan, firstBeat, 0, runtime.contactZone, settings),
+        buildXtowsBeatPayloads(runtime.plan, firstBeat, 0, runtime.contactZone, settings),
       )
       const nextSession: SessionState = {
         ...session,
@@ -491,7 +491,7 @@ async function advancePlayback(userId: string, sequenceId: number): Promise<void
           playbackCycle: Math.max(session.scheduler.playbackCycle, 1) + 1,
           lastCompletionReason: null,
           lastDispatchKind: 'beat',
-          lastDispatchAction: firstBeat.xtoysActionName || firstBeat.actionType,
+          lastDispatchAction: formatXtowsBeatDispatchLabel(firstBeat),
           lastDispatchAt: advancedAt,
           lastDispatchStatus: dispatchResult.ok ? 'ok' : 'error',
           lastDispatchError: dispatchResult.ok ? null : dispatchResult.error,
@@ -511,10 +511,10 @@ async function advancePlayback(userId: string, sequenceId: number): Promise<void
   const settings = await readUserSettings(spindle, userId)
   const nextBeat = orderedBeats[nextIndex]
   const dispatchResult = nextBeat
-    ? await postXtowsPayload(
+    ? await postXtowsBeatPayloads(
         userId,
         settings,
-        buildXtowsBeatPayload(runtime.plan, nextBeat, nextIndex, runtime.contactZone, settings),
+        buildXtowsBeatPayloads(runtime.plan, nextBeat, nextIndex, runtime.contactZone, settings),
       )
     : { ok: true as const }
 
@@ -530,7 +530,7 @@ async function advancePlayback(userId: string, sequenceId: number): Promise<void
       playbackCycle: Math.max(session.scheduler.playbackCycle, 1),
       lastCompletionReason: null,
       lastDispatchKind: nextBeat ? 'beat' : session.scheduler.lastDispatchKind,
-      lastDispatchAction: nextBeat ? nextBeat.xtoysActionName || nextBeat.actionType : session.scheduler.lastDispatchAction,
+      lastDispatchAction: nextBeat ? formatXtowsBeatDispatchLabel(nextBeat) : session.scheduler.lastDispatchAction,
       lastDispatchAt: nextBeat ? advancedAt : session.scheduler.lastDispatchAt,
       lastDispatchStatus: nextBeat ? (dispatchResult.ok ? 'ok' : 'error') : session.scheduler.lastDispatchStatus,
       lastDispatchError: nextBeat && !dispatchResult.ok ? dispatchResult.error : null,
@@ -579,10 +579,10 @@ async function startPlaybackScheduler(
   const firstBeat = getOrderedResolvedBeats(plan)[0] ?? null
   const settings = await readUserSettings(spindle, userId)
   const dispatchResult = firstBeat
-    ? await postXtowsPayload(
+    ? await postXtowsBeatPayloads(
         userId,
         settings,
-        buildXtowsBeatPayload(plan, firstBeat, 0, contactZone, settings),
+        buildXtowsBeatPayloads(plan, firstBeat, 0, contactZone, settings),
       )
     : { ok: true as const }
   const nextSession: SessionState = {
@@ -600,7 +600,7 @@ async function startPlaybackScheduler(
       playbackCycle: 1,
       lastCompletionReason: null,
       lastDispatchKind: firstBeat ? 'beat' : null,
-      lastDispatchAction: firstBeat ? firstBeat.xtoysActionName || firstBeat.actionType : null,
+      lastDispatchAction: firstBeat ? formatXtowsBeatDispatchLabel(firstBeat) : null,
       lastDispatchAt: firstBeat ? startedAt : null,
       lastDispatchStatus: firstBeat ? (dispatchResult.ok ? 'ok' : 'error') : null,
       lastDispatchError: firstBeat && !dispatchResult.ok ? dispatchResult.error : null,
@@ -1782,7 +1782,26 @@ function sanitizeXtowsBaseUrl(baseUrl: string): string {
 function buildXtowsWebhookUrl(settings: UserSettings): string | null {
   const webhookId = settings.xtoysDelivery.privateWebhookId.trim()
   if (!webhookId) return null
-  return `${sanitizeXtowsBaseUrl(settings.xtoysDelivery.webhookBaseUrl)}/${encodeURIComponent(webhookId)}`
+  return sanitizeXtowsBaseUrl(settings.xtoysDelivery.webhookBaseUrl)
+}
+
+function buildXtowsWebhookQueryUrl(
+  settings: UserSettings,
+  payload: Record<string, unknown>,
+): string | null {
+  const baseUrl = buildXtowsWebhookUrl(settings)
+  const webhookId = settings.xtoysDelivery.privateWebhookId.trim()
+  if (!baseUrl || !webhookId) return null
+
+  const query = new URLSearchParams()
+  query.set('id', webhookId)
+
+  for (const [key, value] of Object.entries(payload)) {
+    if (value === undefined || value === null) continue
+    query.set(key, String(value))
+  }
+
+  return `${baseUrl}/?${query.toString()}`
 }
 
 async function postXtowsPayload(
@@ -1794,7 +1813,7 @@ async function postXtowsPayload(
     return { ok: true }
   }
 
-  const url = buildXtowsWebhookUrl(settings)
+  const url = buildXtowsWebhookQueryUrl(settings, payload)
   if (!url) {
     return { ok: false, error: 'XToys delivery is enabled but no private webhook ID is configured.' }
   }
@@ -1811,11 +1830,7 @@ async function postXtowsPayload(
 
   try {
     const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify(payload),
+      method: 'GET',
       signal: controller.signal,
     })
 
@@ -1823,7 +1838,9 @@ async function postXtowsPayload(
       return { ok: false, error: `XToys webhook returned ${response.status} ${response.statusText}`.trim() }
     }
 
-    spindle.log.info(`Lummate dispatched XToys webhook event for user ${userId}: ${String(payload.action ?? 'unknown')}`)
+    spindle.log.info(
+      `Lummate dispatched XToys webhook event for user ${userId}: ${String(payload[settings.xtoysDelivery.triggerFieldName] ?? payload.action ?? 'unknown')}`,
+    )
     return { ok: true }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
@@ -1834,33 +1851,59 @@ async function postXtowsPayload(
   }
 }
 
-function buildXtowsBeatPayload(
+async function postXtowsBeatPayloads(
+  userId: string,
+  settings: UserSettings,
+  payloads: Record<string, unknown>[],
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  let lastError: string | null = null
+
+  for (const payload of payloads) {
+    const result = await postXtowsPayload(userId, settings, payload)
+    if (!result.ok) {
+      lastError = result.error
+    }
+  }
+
+  return lastError ? { ok: false, error: lastError } : { ok: true }
+}
+
+function buildXtowsBeatPayloads(
   plan: MessagePlan,
   beat: ResolvedBeat,
   beatIndex: number,
   contactZone: UserContactZone,
   settings: UserSettings,
-): Record<string, unknown> {
-  const level = resolveXtowsIntensityLevel(beat.amplitude)
-  const payload: Record<string, unknown> = {}
-  payload[settings.xtoysDelivery.triggerFieldName] = buildXtowsLeveledActionName(
-    beat.xtoysActionName || beat.actionType,
-    level,
+): Record<string, unknown>[] {
+  const baseActionName = normalizeXtowsBaseActionName(beat.xtoysActionName || beat.actionType)
+  const cappedIntensity = clamp(
+    Math.round(beat.amplitude),
+    0,
+    clamp(Math.round(settings.xtoysDelivery.maxIntensity), 0, 100),
   )
-  payload[settings.xtoysDelivery.intensityFieldName] = clamp(Math.round(beat.amplitude), 0, 100)
-  payload[settings.xtoysDelivery.rampSecondsFieldName] = resolveXtowsRampSeconds(beat)
-  payload.kind = 'beat'
-  payload.message_id = plan.messageId
-  payload.beat_index = beatIndex
-  payload.order_index = beat.orderIndex
-  payload.semantic_action_type = beat.actionType
-  payload.contact_zone = contactZone
-  payload.transition_style = beat.transitionStyle
-  payload.execution_profile = beat.executionProfile
-  payload.duration_ms = beat.durationMs
-  payload.tempo = beat.tempo
-  payload.intensity_level = level
-  return payload
+  const cappedRampSeconds = clamp(
+    resolveXtowsRampSeconds(beat),
+    0,
+    Math.max(0, settings.xtoysDelivery.maxRampSeconds),
+  )
+  const payload: Record<string, unknown> = {
+    kind: 'beat',
+    message_id: plan.messageId,
+    beat_index: beatIndex,
+    order_index: beat.orderIndex,
+    semantic_action_type: beat.actionType,
+    contact_zone: contactZone,
+    transition_style: beat.transitionStyle,
+    execution_profile: beat.executionProfile,
+    duration_ms: beat.durationMs,
+    tempo: beat.tempo,
+    base_action: baseActionName,
+    [settings.xtoysDelivery.intensityFieldName]: cappedIntensity,
+    [settings.xtoysDelivery.rampSecondsFieldName]: Math.round(cappedRampSeconds * 100) / 100,
+    [settings.xtoysDelivery.triggerFieldName]: baseActionName,
+  }
+
+  return [payload]
 }
 
 function buildXtowsControlPayload(
@@ -1881,26 +1924,59 @@ function buildXtowsControlPayload(
 
 function resolveXtowsRampSeconds(beat: ResolvedBeat): number {
   if (beat.transitionStyle === 'snap') return 0
-  if (beat.transitionStyle === 'pulse') return 0.1
-  if (beat.transitionStyle === 'ramp') return 0.35
-  if (beat.transitionStyle === 'fade') return 0.6
 
   const normalizedTempo = clamp(beat.tempo, 0, 100)
-  const derived = 0.6 - normalizedTempo * 0.005
-  return Math.max(0.05, Math.min(0.6, Math.round(derived * 100) / 100))
+  const normalizedRatio = normalizedTempo / 100
+
+  // Frequency maps inversely onto XToys ramp time:
+  // very slow semantic beats should be able to linger for several seconds,
+  // while very fast beats should converge on short, snappy ramps.
+  const baseSeconds = 0.1 + (10 - 0.1) * Math.pow(1 - normalizedRatio, 2.15)
+  const actionAdjustedSeconds = baseSeconds * resolveXtowsRampActionModifier(beat.actionType)
+  const transitionAdjustedSeconds =
+    beat.transitionStyle === 'pulse'
+      ? actionAdjustedSeconds * 0.45
+      : beat.transitionStyle === 'ramp'
+        ? actionAdjustedSeconds * 1.15
+        : beat.transitionStyle === 'fade'
+          ? actionAdjustedSeconds * 1.35
+          : actionAdjustedSeconds
+
+  return Math.max(0.05, Math.min(10, Math.round(transitionAdjustedSeconds * 100) / 100))
 }
 
-function resolveXtowsIntensityLevel(amplitude: number): 'low' | 'medium' | 'high' {
-  const normalized = clamp(Math.round(amplitude), 0, 100)
-  if (normalized >= 70) return 'high'
-  if (normalized >= 40) return 'medium'
-  return 'low'
+function resolveXtowsRampActionModifier(actionType: ActionType): number {
+  switch (actionType) {
+    case 'tease':
+      return 1.15
+    case 'stroke':
+      return 1
+    case 'thrust':
+      return 0.75
+    case 'suction':
+      return 0.8
+    case 'grind':
+      return 1.25
+    case 'pulse':
+      return 0.45
+    case 'lick':
+      return 0.7
+    case 'squeeze':
+      return 0.9
+    case 'pause':
+      return 1.4
+    default:
+      return 1
+  }
 }
 
-function buildXtowsLeveledActionName(baseActionName: string, level: 'low' | 'medium' | 'high'): string {
-  const trimmed = baseActionName.trim() || 'stroke'
-  const normalizedBase = trimmed.replace(/-(low|medium|high)$/i, '')
-  return `${normalizedBase}-${level}`
+function normalizeXtowsBaseActionName(actionName: string): string {
+  const trimmed = actionName.trim() || 'stroke'
+  return trimmed.replace(/-(low|medium|high)$/i, '')
+}
+
+function formatXtowsBeatDispatchLabel(beat: ResolvedBeat): string {
+  return normalizeXtowsBaseActionName(beat.xtoysActionName || beat.actionType)
 }
 
 function clamp(value: number, min: number, max: number): number {

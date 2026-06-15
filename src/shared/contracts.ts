@@ -244,6 +244,8 @@ export interface XToysDeliverySettings {
   privateWebhookId: string
   webhookBaseUrl: string
   requestTimeoutMs: number
+  maxIntensity: number
+  maxRampSeconds: number
   stopActionName: string
   holdActionName: string
   resumeActionName: string
@@ -375,6 +377,8 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
     privateWebhookId: '',
     webhookBaseUrl: 'https://webhook.xtoys.app',
     requestTimeoutMs: 8000,
+    maxIntensity: 100,
+    maxRampSeconds: 10,
     stopActionName: 'stop',
     holdActionName: 'hold',
     resumeActionName: 'resume',

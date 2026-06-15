@@ -1467,7 +1467,7 @@ export function setup(ctx: SpindleFrontendContext) {
     deliverySection.className = 'lummate-settings-section'
     deliverySection.innerHTML = `
       <h3>XToys Delivery</h3>
-      <p>XToys private webhooks use a saved Webhook ID. Lummate sends one beat or control event at a time using action-trigger compatibility, with semantic actions quantized to <code>-low</code>, <code>-medium</code>, or <code>-high</code> suffixes.</p>
+      <p>XToys private webhooks use a saved Webhook ID. Lummate sends one beat or control event at a time using XToys-compatible query-string webhook requests, with one base action trigger plus per-beat <code>intensity</code> and <code>seconds</code> values.</p>
     `
 
     const deliveryGrid = document.createElement('div')
@@ -1491,7 +1491,7 @@ export function setup(ctx: SpindleFrontendContext) {
     registerSettingsComponent(
       ctx.components.mountTextInput(webhookIdMount, {
         value: draftSettings.xtoysDelivery.privateWebhookId,
-        placeholder: 'Example: ABCD1234',
+        placeholder: 'Example: mtIxeqcvxmDC',
         ariaLabel: 'XToys private webhook ID',
         onChange: (value) => {
           if (!draftSettings) return
@@ -1525,6 +1525,36 @@ export function setup(ctx: SpindleFrontendContext) {
         onChange: (value) => {
           if (!draftSettings || value == null) return
           draftSettings.xtoysDelivery.requestTimeoutMs = value
+          setSettingsStatus('Unsaved changes')
+        },
+      }),
+    )
+
+    const maxIntensityMount = createField(deliveryGrid, 'Global intensity cap')
+    registerSettingsComponent(
+      ctx.components.mountNumberStepper(maxIntensityMount, {
+        value: draftSettings.xtoysDelivery.maxIntensity,
+        min: 0,
+        max: 100,
+        step: 1,
+        onChange: (value) => {
+          if (!draftSettings || value == null) return
+          draftSettings.xtoysDelivery.maxIntensity = value
+          setSettingsStatus('Unsaved changes')
+        },
+      }),
+    )
+
+    const maxRampMount = createField(deliveryGrid, 'Ramp time cap (seconds)')
+    registerSettingsComponent(
+      ctx.components.mountNumberStepper(maxRampMount, {
+        value: draftSettings.xtoysDelivery.maxRampSeconds,
+        min: 0,
+        max: 30,
+        step: 0.1,
+        onChange: (value) => {
+          if (!draftSettings || value == null) return
+          draftSettings.xtoysDelivery.maxRampSeconds = value
           setSettingsStatus('Unsaved changes')
         },
       }),

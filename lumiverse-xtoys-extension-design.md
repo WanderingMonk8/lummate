@@ -1217,29 +1217,25 @@ This is useful for simple testing and direct device sanity checks, but it gives 
 
 Because the mechanical behavior is largely predefined on the XToys side, this should be treated as a minimal compatibility path rather than the preferred semantic runtime.
 
-### 2. Quantized Pattern Dispatch
+### 2. Action Trigger Plus Scalar Control
 
 This should be the preferred v1 delivery model.
 
-In this model, Lumiverse still resolves the semantic beat, but instead of trying to command fully continuous toy motion, it emits a quantized XToys action name for that beat:
+In this model, Lumiverse resolves the semantic beat and emits:
 
-- `name-low`
-- `name-medium`
-- `name-high`
+- one base XToys action trigger such as `thrust` or `suction`
+- a scalar `intensity` value
+- a scalar `seconds` value used for XToys-side ramp timing
 
-Examples:
+Example:
 
-- `thrust-low`
-- `thrust-medium`
-- `thrust-high`
-- `suction-low`
-- `grind-high`
+- `action=thrust`
+- `intensity=72`
+- `seconds=0.24`
 
-The XToys side then maps each quantized action onto a prebuilt pattern or local action stack.
+The XToys side then reacts to the base action trigger and uses the scalar values inside the same webhook event to shape the local output behavior.
 
-This preserves a useful amount of semantic variation while staying compatible with the private-webhook action style that real XToys setups already use successfully.
-
-Lumiverse may still send scalar fields such as intensity or ramp time for local XToys expressions, but the primary execution contract is the quantized action trigger itself.
+This preserves semantic control while staying compatible with the webhook request shape that has been verified against real XToys setups.
 
 ### 3. Direct Scripted Axis Modulation
 
@@ -1300,7 +1296,7 @@ For now, the preferred architecture is:
 - Lumiverse = narrative parser and sequence planner
 - XToys = tactile execution runtime
 
-For v1 specifically, the preferred XToys execution model should be quantized pattern dispatch using semantic base names plus `low`, `medium`, and `high` intensity bands.
+For v1 specifically, the preferred XToys execution model should be a base action trigger plus scalar `intensity` and `seconds` values delivered in the same webhook request.
 
 ## Safety and Comfort
 
@@ -1311,6 +1307,7 @@ The extension should support:
 - panic stop
 - cooldown or rate limiting
 - max intensity cap
+- max ramp-time cap
 - max hold time
 - transition smoothing
 - safe ramp down behavior
@@ -1333,6 +1330,7 @@ Likely user settings include:
 - regenerate cached character tactile profile
 - transition smoothing
 - max intensity
+- max ramp time
 - max hold time
 - parsing session deactivation threshold
 - auto-play new scenes as an advanced opt-in option

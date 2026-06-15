@@ -31,7 +31,10 @@ Instead of firing blindly on every message, Lummate reads the scene, figures out
   Tune how each semantic action should feel on your own setup instead of relying on one universal interpretation.
 
 - **XToys-ready webhook delivery**
-  Sends XToys-compatible action triggers using quantized `low`, `medium`, and `high` intensity levels, plus optional intensity and ramp fields.
+  Sends XToys-compatible action triggers together with per-beat `intensity` and `seconds` values in the same webhook request.
+
+- **Built-in safety caps**
+  Apply a global intensity cap and a global ramp-time cap before values are sent to XToys.
 
 - **Desktop and mobile controls**
   Supports desktop hover breakout controls and mobile long-press controls for a cleaner per-message UI.
@@ -60,13 +63,14 @@ The Lumiverse-side extension has been verified in Lumiverse far enough to confir
 - tactile calibration changes now affect resolved beat output
 - runtime-only held-state continuity is now active, including entry-beat transition selection and end-of-playback resolution for replace/modulate/basic blend flows
 - Lumiverse-side beat scheduling is now active, including beat-by-beat timer ownership, cancellation, loop handling, hold completion, and runtime scheduler-state verification
-- XToys webhook delivery now follows the working private-webhook action-trigger path, including quantized `low` / `medium` / `high` action dispatch with optional intensity and ramp fields
+- XToys webhook delivery now follows the working private-webhook query-string path, sending one base action plus per-beat `intensity` and `seconds` values
+- global XToys safety caps are now available for maximum intensity and maximum ramp time
 
 The parser still mixes LLM output with deterministic fallback logic while the scene-matching rules are being tuned. Blend behavior is still a Lumiverse-side heuristic for now rather than a true XToys-side concurrent execution model. But the Lumiverse-side shell, state model, tracked-participant flow, profile cache, held-state controller, scheduler, and XToys compatibility delivery path are now active and usable inside Lumiverse.
 
 ## Version
 
-Current release: `1.0.0`
+Current release: `1.1.0`
 
 The main working documents are:
 

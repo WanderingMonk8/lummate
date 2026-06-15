@@ -1545,7 +1545,7 @@ export function setup(ctx: SpindleFrontendContext) {
       }),
     )
 
-    const maxRampMount = createField(deliveryGrid, 'Ramp time cap (seconds)')
+    const maxRampMount = createField(deliveryGrid, 'Max ramp time (seconds)')
     registerSettingsComponent(
       ctx.components.mountNumberStepper(maxRampMount, {
         value: draftSettings.xtoysDelivery.maxRampSeconds,

@@ -1881,11 +1881,7 @@ function buildXtowsBeatPayloads(
     0,
     clamp(Math.round(settings.xtoysDelivery.maxIntensity), 0, 100),
   )
-  const cappedRampSeconds = clamp(
-    resolveXtowsRampSeconds(beat),
-    0,
-    Math.max(0, settings.xtoysDelivery.maxRampSeconds),
-  )
+  const cappedRampSeconds = resolveXtowsRampSeconds(beat, settings.xtoysDelivery.maxRampSeconds)
   const payload: Record<string, unknown> = {
     kind: 'beat',
     message_id: plan.messageId,
@@ -1922,16 +1918,17 @@ function buildXtowsControlPayload(
   return payload
 }
 
-function resolveXtowsRampSeconds(beat: ResolvedBeat): number {
+function resolveXtowsRampSeconds(beat: ResolvedBeat, configuredMaxRampSeconds = 10): number {
   if (beat.transitionStyle === 'snap') return 0
 
   const normalizedTempo = clamp(beat.tempo, 0, 100)
   const normalizedRatio = normalizedTempo / 100
+  const maxRampSeconds = Math.max(0.1, configuredMaxRampSeconds)
 
   // Frequency maps inversely onto XToys ramp time:
   // very slow semantic beats should be able to linger for several seconds,
   // while very fast beats should converge on short, snappy ramps.
-  const baseSeconds = 0.1 + (10 - 0.1) * Math.pow(1 - normalizedRatio, 2.15)
+  const baseSeconds = 0.1 + (maxRampSeconds - 0.1) * Math.pow(1 - normalizedRatio, 2.15)
   const actionAdjustedSeconds = baseSeconds * resolveXtowsRampActionModifier(beat.actionType)
   const transitionAdjustedSeconds =
     beat.transitionStyle === 'pulse'
@@ -1942,7 +1939,7 @@ function resolveXtowsRampSeconds(beat: ResolvedBeat): number {
           ? actionAdjustedSeconds * 1.35
           : actionAdjustedSeconds
 
-  return Math.max(0.05, Math.min(10, Math.round(transitionAdjustedSeconds * 100) / 100))
+  return Math.max(0.05, Math.min(maxRampSeconds, Math.round(transitionAdjustedSeconds * 100) / 100))
 }
 
 function resolveXtowsRampActionModifier(actionType: ActionType): number {

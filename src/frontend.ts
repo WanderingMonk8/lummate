@@ -2123,7 +2123,10 @@ export function setup(ctx: SpindleFrontendContext) {
       return
     }
 
-    button.addEventListener('click', () => {
+    let suppressNextClick = false
+    let longPressTriggered = false
+
+    const sendPlayToggle = () => {
       status.textContent = 'Contacting backend...'
       ctx.sendToBackend({
         type: 'lummate.phase1.play_toggle',
@@ -2133,6 +2136,14 @@ export function setup(ctx: SpindleFrontendContext) {
           playbackModeOverride: getPlaybackModeForMessage(messageId),
         },
       })
+    }
+
+    button.addEventListener('click', () => {
+      if (suppressNextClick) {
+        suppressNextClick = false
+        return
+      }
+      sendPlayToggle()
     })
 
     menuButton.addEventListener('click', (event) => {
@@ -2174,7 +2185,10 @@ export function setup(ctx: SpindleFrontendContext) {
       if (longPressTimer !== null) {
         window.clearTimeout(longPressTimer)
       }
+      longPressTriggered = false
       longPressTimer = window.setTimeout(() => {
+        longPressTriggered = true
+        suppressNextClick = true
         openBreakout(messageId)
         updateBreakoutModeButtons(messageId)
       }, 450)
@@ -2187,7 +2201,17 @@ export function setup(ctx: SpindleFrontendContext) {
       }
     }
 
-    button.addEventListener('touchend', clearLongPress)
+    button.addEventListener('touchend', (event) => {
+      clearLongPress()
+      if (longPressTriggered) {
+        event.preventDefault()
+        return
+      }
+
+      suppressNextClick = true
+      event.preventDefault()
+      sendPlayToggle()
+    })
     button.addEventListener('touchcancel', clearLongPress)
 
     breakout.addEventListener('click', (event) => {

@@ -352,6 +352,11 @@ async function finalizePlayback(
   const completionAt = new Date().toISOString()
   const orderedBeats = getOrderedResolvedBeats(runtime.plan)
   const lastBeatIndex = orderedBeats.length > 0 ? orderedBeats.length - 1 : null
+  const activeActionName = resolveRuntimeActiveActionName(
+    runtime.plan,
+    session.scheduler.activeBeatIndex,
+    session.heldState,
+  )
   const nextHeldState = resolveHeldStateAfterPlayback(
     runtime.plan.endResolution,
     runtime.futureHeldState,
@@ -364,20 +369,20 @@ async function finalizePlayback(
 
   if (reason === 'stopped') {
     dispatchActionName = settings.xtoysDelivery.stopActionName
-    dispatchResult = await postXtowsPayload(
+    dispatchResult = await postXtowsBeatPayloads(
       userId,
       settings,
-      buildXtowsControlPayload(settings, dispatchActionName, 'stop', {
+      buildXtowsStopPayloads(settings, activeActionName, 'stop', {
         reason,
         message_id: runtime.plan.messageId,
       }),
     )
   } else if (reason === 'panic_stop') {
     dispatchActionName = settings.xtoysDelivery.panicStopActionName
-    dispatchResult = await postXtowsPayload(
+    dispatchResult = await postXtowsBeatPayloads(
       userId,
       settings,
-      buildXtowsControlPayload(settings, dispatchActionName, 'panic_stop', {
+      buildXtowsStopPayloads(settings, activeActionName, 'panic_stop', {
         reason,
         message_id: runtime.plan.messageId,
       }),
@@ -1931,10 +1936,68 @@ function buildXtowsControlPayload(
   payload[settings.xtoysDelivery.triggerFieldName] = actionName
   payload.kind = 'control'
   payload.control = control
+  if (control === 'stop' || control === 'panic_stop') {
+    payload[settings.xtoysDelivery.intensityFieldName] = 0
+    payload[settings.xtoysDelivery.rampSecondsFieldName] = 0
+  }
   for (const key of Object.keys(details)) {
     payload[key] = details[key]
   }
   return payload
+}
+
+function resolveRuntimeActiveActionName(
+  plan: MessagePlan | null | undefined,
+  activeBeatIndex: number | null | undefined,
+  heldState: HeldState | null | undefined,
+): string | null {
+  const orderedBeats = plan ? getOrderedResolvedBeats(plan) : []
+  const beatFromIndex =
+    activeBeatIndex != null && activeBeatIndex >= 0 && activeBeatIndex < orderedBeats.length
+      ? orderedBeats[activeBeatIndex]
+      : null
+  const lastBeat = orderedBeats.length > 0 ? orderedBeats[orderedBeats.length - 1] : null
+  const resolvedActionName =
+    beatFromIndex?.xtoysActionName ??
+    lastBeat?.xtoysActionName ??
+    heldState?.actionFamily ??
+    null
+
+  return resolvedActionName ? normalizeXtowsBaseActionName(resolvedActionName) : null
+}
+
+function buildXtowsStopPayloads(
+  settings: UserSettings,
+  activeActionName: string | null,
+  control: 'stop' | 'panic_stop',
+  details: Record<string, unknown> = {},
+): Record<string, unknown>[] {
+  const payloads: Record<string, unknown>[] = []
+
+  if (activeActionName) {
+    payloads.push({
+      kind: 'control',
+      control,
+      base_action: activeActionName,
+      [settings.xtoysDelivery.triggerFieldName]: activeActionName,
+      [settings.xtoysDelivery.intensityFieldName]: 0,
+      [settings.xtoysDelivery.rampSecondsFieldName]: 0,
+      ...details,
+    })
+  }
+
+  payloads.push(
+    buildXtowsControlPayload(
+      settings,
+      control === 'panic_stop'
+        ? settings.xtoysDelivery.panicStopActionName
+        : settings.xtoysDelivery.stopActionName,
+      control,
+      details,
+    ),
+  )
+
+  return payloads
 }
 
 function resolveXtowsRampSeconds(beat: ResolvedBeat, configuredMaxRampSeconds = 10): number {
@@ -3923,6 +3986,7 @@ async function handleFrontendMessage(
         let continuityMemoryPatch: Record<string, unknown> = {}
         let nextScheduler = { ...current.scheduler }
         let plannedHeldState: HeldState | null = null
+        let manualStopDispatchAction = settings.xtoysDelivery.stopActionName
 
         if (payload.payload.chatId && nextActiveMessageId) {
           const nextPlan = await buildMessagePlan(
@@ -3965,10 +4029,16 @@ async function handleFrontendMessage(
             lastCompletionReason: null,
           }
         } else if (current.activeMessageId === payload.payload.messageId) {
-          const stopDispatch = await postXtowsPayload(
+          const activeActionName = resolveRuntimeActiveActionName(
+            current.runtimePlans.currentPlan,
+            current.scheduler.activeBeatIndex,
+            current.heldState,
+          )
+          manualStopDispatchAction = activeActionName ?? settings.xtoysDelivery.stopActionName
+          const stopDispatch = await postXtowsBeatPayloads(
             userId,
             settings,
-            buildXtowsControlPayload(settings, settings.xtoysDelivery.stopActionName, 'stop', {
+            buildXtowsStopPayloads(settings, activeActionName, 'stop', {
               reason: 'manual_stop',
               message_id: payload.payload.messageId,
             }),
@@ -3981,7 +4051,7 @@ async function handleFrontendMessage(
             status: 'stopped',
             lastCompletionReason: 'stopped',
             lastDispatchKind: 'control',
-            lastDispatchAction: settings.xtoysDelivery.stopActionName,
+            lastDispatchAction: manualStopDispatchAction,
             lastDispatchAt: new Date().toISOString(),
             lastDispatchStatus: stopDispatch.ok ? 'ok' : 'error',
             lastDispatchError: stopDispatch.ok ? null : stopDispatch.error,

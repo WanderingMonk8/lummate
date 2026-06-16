@@ -24,6 +24,7 @@ import type {
 const CALIBRATABLE_ACTION_TYPES: ActionType[] = [
   'tease',
   'finger',
+  'ride',
   'stroke',
   'thrust',
   'suction',

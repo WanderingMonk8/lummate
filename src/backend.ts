@@ -132,7 +132,7 @@ const PARSE_SCENE_TOOL = {
             source_excerpt: { type: 'string' },
             action_type: {
               type: 'string',
-              enum: ['tease', 'finger', 'stroke', 'thrust', 'suction', 'grind', 'pulse', 'lick', 'squeeze', 'pause'],
+              enum: ['tease', 'finger', 'ride', 'stroke', 'thrust', 'suction', 'grind', 'pulse', 'lick', 'squeeze', 'pause'],
             },
             strength: { type: 'number' },
             frequency: { type: 'number' },
@@ -1112,6 +1112,7 @@ function normalizeContinuityVerdict(value: unknown): MessagePlan['continuityVerd
 function normalizeActionType(value: unknown): ActionType {
   return value === 'tease' ||
     value === 'finger' ||
+    value === 'ride' ||
     value === 'stroke' ||
     value === 'thrust' ||
     value === 'suction' ||
@@ -1967,6 +1968,8 @@ function resolveXtowsRampActionModifier(actionType: ActionType): number {
       return 1.15
     case 'finger':
       return 0.95
+    case 'ride':
+      return 0.9
     case 'stroke':
       return 1
     case 'thrust':
@@ -2014,6 +2017,12 @@ function createBaselineParticipantState(messageId: string): ParticipantState {
 
 function detectActionType(content: string): ActionType {
   const normalized = content.toLowerCase()
+  const hasRideCue =
+    /\b(ride|rides|riding|rode|straddle|straddles|straddling|bounce|bounces|bouncing|buck|bucks|bucking|rock|rocks|rocking|twerk|twerks|twerking|twerked)\b/i.test(
+      normalized,
+    ) &&
+    /\b(hips|thighs|ass|body|cunt|pussy|folds|heat|cock|dick|penis|shaft|lap|pelvis)\b/i.test(normalized)
+  const hasGrindCue = /\b(grind|grinds|grinding|circle|circles|circular|rolling)\b/i.test(normalized)
 
   if (
     /\b(your\s+(cock|dick|penis|shaft)|cock|dick|penis|shaft)\b[^.!?]{0,40}\b(parts?|push(?:es|ing)?|press(?:es|ing)?|slides?|sliding|sinks?|sinking|buries?|enter(?:s|ing)?|disappears?|fill(?:s|ing)?|seat(?:s|ed|ing)?|hilt)\b/i.test(
@@ -2027,8 +2036,10 @@ function detectActionType(content: string): ActionType {
   }
   if (normalized.includes('suction') || normalized.includes('suck')) return 'suction'
   if (/\b(finger|fingers|fingering|knuckle|digits?)\b/i.test(normalized)) return 'finger'
+  if (hasRideCue && !hasGrindCue) return 'ride'
   if (normalized.includes('thrust')) return 'thrust'
   if (normalized.includes('grind')) return 'grind'
+  if (normalized.includes('ride')) return 'ride'
   if (normalized.includes('stroke')) return 'stroke'
   if (normalized.includes('lick')) return 'lick'
   if (normalized.includes('squeez')) return 'squeeze'
@@ -2528,6 +2539,12 @@ function rankZoneScopedActionHints(
     const hasMouthCue = /\b(mouth|lips|tongue|throat|oral)\b/i.test(windowText)
     const hasHandCue = /\b(hand|hands|fingers|palm|grip|wrapped|wraps|stroking by hand)\b/i.test(windowText)
     const hasGenitalCue = /\b(cock|dick|penis|shaft|head|tip|length)\b/i.test(windowText)
+    const hasRideCue =
+      /\b(ride|rides|riding|rode|straddle|straddles|straddling|bounce|bounces|bouncing|buck|bucks|bucking|rock|rocks|rocking|twerk|twerks|twerking|twerked)\b/i.test(
+        windowText,
+      ) &&
+      /\b(hips|thighs|ass|body|cunt|pussy|folds|heat|cock|dick|penis|shaft|lap|pelvis)\b/i.test(windowText)
+    const hasGrindCue = /\b(grind|grinds|grinding|circle|circles|circular|rolling)\b/i.test(windowText)
 
     if (/\b(suck|sucking|suction)\b/i.test(windowText)) addScore('suction', 5)
     if (/\b(takes?\s+(him|it)\s+deep|into\s+(her|his)\s+mouth|throat\s+working)\b/i.test(windowText)) {
@@ -2571,6 +2588,10 @@ function rankZoneScopedActionHints(
     ) {
       addScore('thrust', 7)
     }
+    if (hasRideCue && !hasGrindCue) addScore('ride', 5)
+    if (/\b(hips?\s+(press|move|moving|lift|lifting|drop|dropping|rise|rising|fall|falling|roll|rolling)\b|up and down)\b/i.test(windowText) && !hasGrindCue) {
+      addScore('ride', 3)
+    }
     if (/\b(grind|grinding|circle|circular|rolling)\b/i.test(windowText)) addScore('grind', 1)
     if (/\b(tease|teasing|trace|tracing)\b/i.test(windowText)) addScore('tease', 2)
     if (/\b(squeeze|squeezing|clench)\b/i.test(windowText)) addScore('squeeze', 2)
@@ -2597,7 +2618,7 @@ function extractZoneScopedActionHints(
 }
 
 function hasEroticActionCue(text: string): boolean {
-  return /\b(finger|fingers|fingering|stroke|strokes|thrust|thrusts|grind|grinds|lick|licks|suck|sucks|suction|ride|rides|press|presses|fuck|fucks|tease|teases|rub|rubs|kiss|kisses|slide|slides|sink|sinks|fill|fills|mouth|tongue|lips|throat|inside|into|buried|clench|pulse|swallow|swallows|cleaning|taste|tasting)\b/i.test(
+  return /\b(finger|fingers|fingering|ride|rides|riding|twerk|twerks|twerking|stroke|strokes|thrust|thrusts|grind|grinds|lick|licks|suck|sucks|suction|press|presses|fuck|fucks|tease|teases|rub|rubs|kiss|kisses|slide|slides|sink|sinks|fill|fills|mouth|tongue|lips|throat|inside|into|buried|clench|pulse|swallow|swallows|cleaning|taste|tasting)\b/i.test(
     text,
   )
 }
@@ -2703,6 +2724,15 @@ function buildClauseActionCueMap(clause: string): Map<ActionType, number> {
   }
   if (/\b(hand|hands)\b/i.test(normalized) && /\b(inside|enter|curl|scissor|pump)\b/i.test(normalized)) {
     addCue('finger', 4)
+  }
+  if (
+    /\b(ride|rides|riding|rode|straddle|straddles|straddling|bounce|bounces|bouncing|buck|bucks|bucking|rock|rocks|rocking|twerk|twerks|twerking|twerked)\b/i.test(
+      normalized,
+    ) &&
+    /\b(hips|thighs|ass|body|cunt|pussy|folds|heat|cock|dick|penis|shaft|lap|pelvis)\b/i.test(normalized) &&
+    !/\b(grind|grinds|grinding|circle|circles|circular|rolling)\b/i.test(normalized)
+  ) {
+    addCue('ride', 5)
   }
   if (/\b(stroke|stroking|hand|hands|fingers|grip|wrapped)\b/i.test(normalized)) {
     addCue('stroke', 4)

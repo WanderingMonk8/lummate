@@ -10,7 +10,8 @@ Instead of firing blindly on every message, Lummate reads the scene, figures out
   Add a `Play / Stop` control directly to Lumiverse messages and trigger tactile playback only when you want it.
 
 - **Scene-aware parsing**
-  Lummate parses erotic roleplay text into semantic actions like `thrust`, `suction`, `stroke`, `finger`, `grind`, `lick`, and more.
+  Lummate parses erotic roleplay text into semantic actions like `thrust`, `ride`, `suction`, `stroke`, `finger`, `grind`, `lick`, and more.
+  Hip-driven cues such as riding, rocking, bouncing, and twerking are folded into `ride` unless the scene is clearly describing circular grinding friction instead.
 
 - **Tracked-character targeting**
   Choose who the extension should follow in a scene instead of assuming the user is always the active participant.

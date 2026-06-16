@@ -1354,6 +1354,7 @@ function computeParticipantContribution(
   amplitudeFactor: number
   tempoFactor: number
   durationFactor: number
+  rampFactor: number
 } {
   const axes = resolveEffectiveMechanicalAxes(profile)
   const arousalOffset = (assignment.state.arousal - 50) / 50
@@ -1365,7 +1366,6 @@ function computeParticipantContribution(
     axes.baselineStrengthBias * 0.0018 +
     axes.motionWeight * 0.0012 +
     axes.dominancePressure * 0.0015 +
-    axes.rampAggression * 0.001 +
     arousalOffset * 0.18 +
     energyOffset * 0.08 +
     steadinessOffset * 0.04
@@ -1387,10 +1387,17 @@ function computeParticipantContribution(
     energyOffset * 0.04 +
     focusOffset * 0.03
 
+  const rampBias =
+    axes.rampAggression * -0.003 +
+    arousalOffset * -0.04 +
+    energyOffset * -0.03 +
+    Math.max(0, -steadinessOffset) * 0.03
+
   return {
     amplitudeFactor: clamp(1 + amplitudeBias, 0.7, 1.4),
     tempoFactor: clamp(1 + tempoBias, 0.7, 1.4),
     durationFactor: clamp(1 + durationBias, 0.8, 1.35),
+    rampFactor: clamp(1 + rampBias, 0.65, 1.35),
   }
 }
 
@@ -1401,15 +1408,17 @@ function blendSideContributions(
   amplitudeFactor: number
   tempoFactor: number
   durationFactor: number
+  rampFactor: number
 } {
   if (assignments.length === 0) {
-    return { amplitudeFactor: 1, tempoFactor: 1, durationFactor: 1 }
+    return { amplitudeFactor: 1, tempoFactor: 1, durationFactor: 1, rampFactor: 1 }
   }
 
   let totalWeight = 0
   let amplitude = 0
   let tempo = 0
   let duration = 0
+  let ramp = 0
 
   for (const assignment of assignments) {
     const weight = assignment.weight > 0 ? assignment.weight : 1
@@ -1421,16 +1430,18 @@ function blendSideContributions(
     amplitude += contribution.amplitudeFactor * weight
     tempo += contribution.tempoFactor * weight
     duration += contribution.durationFactor * weight
+    ramp += contribution.rampFactor * weight
   }
 
   if (totalWeight <= 0) {
-    return { amplitudeFactor: 1, tempoFactor: 1, durationFactor: 1 }
+    return { amplitudeFactor: 1, tempoFactor: 1, durationFactor: 1, rampFactor: 1 }
   }
 
   return {
     amplitudeFactor: amplitude / totalWeight,
     tempoFactor: tempo / totalWeight,
     durationFactor: duration / totalWeight,
+    rampFactor: ramp / totalWeight,
   }
 }
 
@@ -1463,6 +1474,12 @@ function resolveParticipantContributionFactors(
         acteeContribution.durationFactor * semanticBeat.acteeWeight,
       0.85,
       1.3,
+    ),
+    rampFactor: clamp(
+      actorContribution.rampFactor * semanticBeat.actorWeight +
+        acteeContribution.rampFactor * semanticBeat.acteeWeight,
+      0.65,
+      1.35,
     ),
   }
 }
@@ -1938,8 +1955,9 @@ function resolveXtowsRampSeconds(beat: ResolvedBeat, configuredMaxRampSeconds = 
         : beat.transitionStyle === 'fade'
           ? actionAdjustedSeconds * 1.35
           : actionAdjustedSeconds
+  const profileAdjustedSeconds = transitionAdjustedSeconds * clamp(beat.rampFactor, 0.65, 1.35)
 
-  return Math.max(0.05, Math.min(maxRampSeconds, Math.round(transitionAdjustedSeconds * 100) / 100))
+  return Math.max(0.05, Math.min(maxRampSeconds, Math.round(profileAdjustedSeconds * 100) / 100))
 }
 
 function resolveXtowsRampActionModifier(actionType: ActionType): number {
@@ -3773,6 +3791,7 @@ async function buildMessagePlan(
       executionProfile: beatPreset.preferredExecutionProfile,
       amplitude: clamp(Math.round(calibratedAmplitudeBase * amplitudeFactor), 0, 100),
       tempo: clamp(Math.round(calibratedTempoBase * tempoFactor), 0, 100),
+      rampFactor: participantFactors.rampFactor,
       durationMs: clamp(
         Math.round(semanticBeat.durationMs * participantFactors.durationFactor),
         250,

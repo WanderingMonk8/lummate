@@ -175,6 +175,7 @@ export interface ResolvedBeat {
   executionProfile: ExecutionProfile
   amplitude: number
   tempo: number
+  rampFactor: number
   durationMs: number
   transitionStyle: TransitionStyle
   countHint: CountHint

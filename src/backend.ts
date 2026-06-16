@@ -132,7 +132,7 @@ const PARSE_SCENE_TOOL = {
             source_excerpt: { type: 'string' },
             action_type: {
               type: 'string',
-              enum: ['tease', 'stroke', 'thrust', 'suction', 'grind', 'pulse', 'lick', 'squeeze', 'pause'],
+              enum: ['tease', 'finger', 'stroke', 'thrust', 'suction', 'grind', 'pulse', 'lick', 'squeeze', 'pause'],
             },
             strength: { type: 'number' },
             frequency: { type: 'number' },
@@ -1111,6 +1111,7 @@ function normalizeContinuityVerdict(value: unknown): MessagePlan['continuityVerd
 
 function normalizeActionType(value: unknown): ActionType {
   return value === 'tease' ||
+    value === 'finger' ||
     value === 'stroke' ||
     value === 'thrust' ||
     value === 'suction' ||
@@ -1964,6 +1965,8 @@ function resolveXtowsRampActionModifier(actionType: ActionType): number {
   switch (actionType) {
     case 'tease':
       return 1.15
+    case 'finger':
+      return 0.95
     case 'stroke':
       return 1
     case 'thrust':
@@ -2023,6 +2026,7 @@ function detectActionType(content: string): ActionType {
     return 'thrust'
   }
   if (normalized.includes('suction') || normalized.includes('suck')) return 'suction'
+  if (/\b(finger|fingers|fingering|knuckle|digits?)\b/i.test(normalized)) return 'finger'
   if (normalized.includes('thrust')) return 'thrust'
   if (normalized.includes('grind')) return 'grind'
   if (normalized.includes('stroke')) return 'stroke'
@@ -2536,6 +2540,11 @@ function rankZoneScopedActionHints(
     if (/\b(tongue|tonguing|lick|licking|lips)\b/i.test(windowText)) addScore('lick', 4)
     if (/\b(mouth)\b/i.test(windowText)) addScore('lick', 2)
 
+    if (/\b(finger|fingers|fingering|knuckle|digits?)\b/i.test(windowText)) addScore('finger', 5)
+    if (/\b(hand|hands)\b/i.test(windowText) && /\b(inside|enter|curl|scissor|pump)\b/i.test(windowText)) {
+      addScore('finger', 4)
+    }
+
     if (/\b(stroke|stroking|pump|pumping)\b/i.test(windowText) && hasHandCue) addScore('stroke', 4)
     if (
       /\b(shaft|hand\s+still\s+wrapped|works?\s+his\s+shaft|wrapped\s+around\s+the\s+base)\b/i.test(
@@ -2588,7 +2597,7 @@ function extractZoneScopedActionHints(
 }
 
 function hasEroticActionCue(text: string): boolean {
-  return /\b(stroke|strokes|thrust|thrusts|grind|grinds|lick|licks|suck|sucks|suction|ride|rides|press|presses|fuck|fucks|tease|teases|rub|rubs|kiss|kisses|slide|slides|sink|sinks|fill|fills|mouth|tongue|lips|throat|inside|into|buried|clench|pulse|swallow|swallows|cleaning|taste|tasting)\b/i.test(
+  return /\b(finger|fingers|fingering|stroke|strokes|thrust|thrusts|grind|grinds|lick|licks|suck|sucks|suction|ride|rides|press|presses|fuck|fucks|tease|teases|rub|rubs|kiss|kisses|slide|slides|sink|sinks|fill|fills|mouth|tongue|lips|throat|inside|into|buried|clench|pulse|swallow|swallows|cleaning|taste|tasting)\b/i.test(
     text,
   )
 }
@@ -2688,6 +2697,12 @@ function buildClauseActionCueMap(clause: string): Map<ActionType, number> {
   }
   if (/\b(lick|licks|tongue tracing|tongue sweeping|tongue darting|tracing)\b/i.test(normalized)) {
     addCue('lick', 4)
+  }
+  if (/\b(finger|fingers|fingering|knuckle|digits?)\b/i.test(normalized)) {
+    addCue('finger', 5)
+  }
+  if (/\b(hand|hands)\b/i.test(normalized) && /\b(inside|enter|curl|scissor|pump)\b/i.test(normalized)) {
+    addCue('finger', 4)
   }
   if (/\b(stroke|stroking|hand|hands|fingers|grip|wrapped)\b/i.test(normalized)) {
     addCue('stroke', 4)

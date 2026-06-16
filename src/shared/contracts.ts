@@ -32,6 +32,7 @@ export type BeatFallbackBehavior =
 
 export type ActionType =
   | 'tease'
+  | 'finger'
   | 'stroke'
   | 'thrust'
   | 'suction'
@@ -401,6 +402,7 @@ export const DEFAULT_CHAT_TRACKING_PREFERENCES: ChatTrackingPreferences = {
 
 export const ALL_ACTION_TYPES: ActionType[] = [
   'tease',
+  'finger',
   'stroke',
   'thrust',
   'suction',

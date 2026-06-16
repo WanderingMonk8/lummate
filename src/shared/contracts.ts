@@ -258,9 +258,14 @@ export interface XToysDeliverySettings {
   rampSecondsFieldName: string
 }
 
+export interface UiSettings {
+  debugOverlayEnabled: boolean
+}
+
 export interface UserSettings {
   parser: ParserConnectionSettings
   xtoysDelivery: XToysDeliverySettings
+  ui: UiSettings
   xtoysActionMappings: XToysActionMappingSettings[]
   actionCalibrationPresets: ActionCalibrationPreset[]
 }
@@ -389,6 +394,9 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
     triggerFieldName: 'action',
     intensityFieldName: 'intensity',
     rampSecondsFieldName: 'seconds',
+  },
+  ui: {
+    debugOverlayEnabled: false,
   },
   xtoysActionMappings: [],
   actionCalibrationPresets: [],

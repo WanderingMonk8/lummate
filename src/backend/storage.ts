@@ -68,6 +68,10 @@ function mergeSettings(settings: UserSettings): UserSettings {
       ...DEFAULT_USER_SETTINGS.xtoysDelivery,
       ...settings.xtoysDelivery,
     },
+    ui: {
+      ...DEFAULT_USER_SETTINGS.ui,
+      ...settings.ui,
+    },
     xtoysActionMappings: buildDefaultActionMappings().map((mapping) => ({
       ...mapping,
       ...mappingsByType.get(mapping.semanticActionType),

@@ -42,11 +42,13 @@ const CALIBRATION_EXECUTION_PROFILES = [
   'parallel_blend',
 ] as const
 
-const SHOW_PHASE4_DEBUG = false
-const SHOW_PHASE5_DEBUG = false
-const SHOW_PHASE6_DEBUG = false
-const SHOW_PHASE7_DEBUG = false
+const SHOW_PHASE4_DEBUG = true
+const SHOW_PHASE5_DEBUG = true
+const SHOW_PHASE6_DEBUG = true
+const SHOW_PHASE7_DEBUG = true
 const SHOW_XTOYS_ACTION_MAPPING_SETTINGS = false
+const DEBUG_OVERLAY_SUPPORTED =
+  SHOW_PHASE4_DEBUG || SHOW_PHASE5_DEBUG || SHOW_PHASE6_DEBUG || SHOW_PHASE7_DEBUG
 
 const CONTROL_SELECTOR = '.lummate-phase1-control'
 const ACTION_ROW_SELECTORS = [
@@ -494,7 +496,7 @@ export function setup(ctx: SpindleFrontendContext) {
   `)
 
   const debugIndicator = document.createElement('div')
-  if (SHOW_PHASE4_DEBUG || SHOW_PHASE5_DEBUG || SHOW_PHASE6_DEBUG || SHOW_PHASE7_DEBUG) {
+  if (DEBUG_OVERLAY_SUPPORTED) {
     debugIndicator.className = 'lummate-phase4-debug'
     debugIndicator.dataset.armed = 'false'
     debugIndicator.innerHTML = `
@@ -521,6 +523,7 @@ export function setup(ctx: SpindleFrontendContext) {
       <div class="lummate-phase7-debug-trace">Sentence trace: pending</div>
     `
     document.body.appendChild(debugIndicator)
+    debugIndicator.style.display = 'none'
   }
 
   const settingsTab = ctx.ui.registerDrawerTab({
@@ -848,7 +851,10 @@ export function setup(ctx: SpindleFrontendContext) {
   }
 
   function updateDebugIndicator() {
-    if (!SHOW_PHASE4_DEBUG && !SHOW_PHASE5_DEBUG && !SHOW_PHASE6_DEBUG && !SHOW_PHASE7_DEBUG) return
+    if (!DEBUG_OVERLAY_SUPPORTED) return
+    const shouldShow = Boolean(settingsPayload?.settings.ui.debugOverlayEnabled ?? draftSettings?.ui.debugOverlayEnabled)
+    debugIndicator.style.display = shouldShow ? '' : 'none'
+    if (!shouldShow) return
 
     const stateNode = debugIndicator.querySelector('.lummate-phase4-debug-state')
     const countNode = debugIndicator.querySelector('.lummate-phase4-debug-count')
@@ -1066,6 +1072,7 @@ export function setup(ctx: SpindleFrontendContext) {
     return {
       parser: { ...settings.parser },
       xtoysDelivery: { ...settings.xtoysDelivery },
+      ui: { ...settings.ui },
       xtoysActionMappings: settings.xtoysActionMappings.map((mapping) => ({ ...mapping })),
       actionCalibrationPresets: settings.actionCalibrationPresets.map((preset) => ({ ...preset })),
     }
@@ -1890,6 +1897,32 @@ export function setup(ctx: SpindleFrontendContext) {
 
     root.appendChild(calibrationSection)
 
+    if (DEBUG_OVERLAY_SUPPORTED) {
+      const debugSection = document.createElement('section')
+      debugSection.className = 'lummate-settings-section'
+      debugSection.innerHTML = `
+        <h3>Debug</h3>
+        <p>Enable the parser debug overlay when you need to inspect tracked states, parsed beats, and scheduler output.</p>
+      `
+
+      const debugToggleMount = document.createElement('div')
+      debugSection.appendChild(debugToggleMount)
+      registerSettingsComponent(
+        ctx.components.mountSwitch(debugToggleMount, {
+          checked: draftSettings.ui.debugOverlayEnabled,
+          ariaLabel: 'Enable parser debug overlay',
+          onChange: (checked) => {
+            if (!draftSettings) return
+            draftSettings.ui.debugOverlayEnabled = checked
+            setSettingsStatus('Unsaved changes')
+            updateDebugIndicator()
+          },
+        }),
+      )
+
+      root.appendChild(debugSection)
+    }
+
     const actions = document.createElement('div')
     actions.className = 'lummate-settings-actions'
 
@@ -2409,7 +2442,7 @@ export function setup(ctx: SpindleFrontendContext) {
     clearSettingsComponents()
     clearHoverTimers()
     removeStyle()
-    if (SHOW_PHASE4_DEBUG || SHOW_PHASE5_DEBUG || SHOW_PHASE6_DEBUG) {
+    if (DEBUG_OVERLAY_SUPPORTED) {
       debugIndicator.remove()
     }
 

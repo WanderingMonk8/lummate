@@ -12,6 +12,7 @@ Instead of firing blindly on every message, Lummate reads the scene, figures out
 - **Scene-aware parsing**
   Lummate parses erotic roleplay text into semantic actions like `thrust`, `ride`, `suction`, `stroke`, `finger`, `grind`, `lick`, and more.
   Hip-driven cues such as riding, rocking, bouncing, and twerking are folded into `ride` unless the scene is clearly describing circular grinding friction instead.
+  The parser also hardens against common false positives by separating executed contact from quoted dialogue, promises, requests, and future-intent language.
 
 - **Tracked-character targeting**
   Choose who the extension should follow in a scene instead of assuming the user is always the active participant.
@@ -52,7 +53,7 @@ The Lumiverse-side extension has been verified in Lumiverse far enough to confir
 - frontend/backend messaging and runtime per-chat session plumbing are working
 - per-message breakout controls work on desktop hover and mobile long-press
 - the hidden parser-session arming/disarming lifecycle is implemented
-- a Lummate settings drawer is available for parser connection selection, XToys action-name mapping, and Lumiverse-side tactile calibration presets
+- a Lummate settings drawer is available for parser connection selection, tracked-participant targeting, contact-zone targeting, debug toggling, XToys webhook configuration, and Lumiverse-side tactile calibration presets
 - participant tactile profiles are derived, cached, regenerable, and reused
 - group chats can cache more than one character profile when Lumiverse exposes the participant roster
 - tracked participant selection is available per chat, with persisted contact-zone targeting
@@ -60,6 +61,7 @@ The Lumiverse-side extension has been verified in Lumiverse far enough to confir
 - current physical/emotional state parsing is implemented with baseline fallback
 - the parser can use structured LLM output with deterministic zone-scoped fallback
 - contact filtering now respects tracked participant ownership, tracked contact zones, and multi-participant scene context
+- parser hardening now filters out many dialogue-only, promise-only, and prospective-intent misparses before they become tactile beats
 - calibrated tactile resolution is now active, including preset fallback, XToys action-name mapping, participant contribution modulation, and safety-clamped resolved beats
 - tactile calibration changes now affect resolved beat output
 - runtime-only held-state continuity is now active, including entry-beat transition selection and end-of-playback resolution for replace/modulate/basic blend flows

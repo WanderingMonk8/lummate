@@ -742,6 +742,25 @@ function summarizeParticipantProfiles(participantProfiles: ParticipantProfileBun
 function buildUserReferenceHints(participantProfiles: ParticipantProfileBundle): string[] {
   const hints = ['you', 'your', 'yours', 'yourself']
   const userName = participantProfiles.userProfile?.displayName?.trim() ?? ''
+  const userPreview = participantProfiles.userProfile?.sourcePreview ?? ''
+  const inferredPronouns = new Set<string>()
+
+  if (/\b(she|her|hers)\b/i.test(userPreview)) {
+    inferredPronouns.add('she')
+    inferredPronouns.add('her')
+    inferredPronouns.add('hers')
+  }
+  if (/\b(they|them|their|theirs)\b/i.test(userPreview)) {
+    inferredPronouns.add('they')
+    inferredPronouns.add('them')
+    inferredPronouns.add('their')
+    inferredPronouns.add('theirs')
+  }
+  if (/\b(he|him|his)\b/i.test(userPreview) || inferredPronouns.size === 0) {
+    inferredPronouns.add('he')
+    inferredPronouns.add('him')
+    inferredPronouns.add('his')
+  }
 
   if (userName) {
     hints.push(userName)
@@ -754,7 +773,7 @@ function buildUserReferenceHints(participantProfiles: ParticipantProfileBundle):
 
   // Only add third-person aliases when we have an actual user profile anchor.
   if (userName) {
-    hints.push('him', 'his', 'he')
+    hints.push(...inferredPronouns)
   }
 
   return [...new Set(hints)]
@@ -763,9 +782,23 @@ function buildUserReferenceHints(participantProfiles: ParticipantProfileBundle):
 function buildUserPossessiveReferenceHints(participantProfiles: ParticipantProfileBundle): string[] {
   const hints = ['your', 'yours']
   const userName = participantProfiles.userProfile?.displayName?.trim() ?? ''
+  const userPreview = participantProfiles.userProfile?.sourcePreview ?? ''
+  const inferredPossessives = new Set<string>()
+
+  if (/\b(her|hers)\b/i.test(userPreview)) {
+    inferredPossessives.add('her')
+    inferredPossessives.add('hers')
+  }
+  if (/\b(their|theirs)\b/i.test(userPreview)) {
+    inferredPossessives.add('their')
+    inferredPossessives.add('theirs')
+  }
+  if (/\b(his)\b/i.test(userPreview) || inferredPossessives.size === 0) {
+    inferredPossessives.add('his')
+  }
 
   if (userName) {
-    hints.push('his')
+    hints.push(...inferredPossessives)
     hints.push(`${userName}'s`)
     hints.push(`${userName.toLowerCase()}'s`)
   }
@@ -2171,7 +2204,14 @@ function detectActionType(content: string): ActionType {
     return 'thrust'
   }
   if (normalized.includes('suction') || normalized.includes('suck')) return 'suction'
-  if (/\b(finger|fingers|fingering|knuckle|digits?)\b/i.test(normalized)) return 'finger'
+  if (
+    /\b(finger|fingers|fingering|knuckle|digits?)\b/i.test(normalized) &&
+    /\b(inside|enter|curl|scissor|pump|pressing against that spot|that spot inside|working inside|between her legs|between his legs|between their legs)\b/i.test(
+      normalized,
+    )
+  ) {
+    return 'finger'
+  }
   if (hasRideCue && !hasGrindCue) return 'ride'
   if (normalized.includes('thrust')) return 'thrust'
   if (normalized.includes('grind')) return 'grind'
@@ -2287,12 +2327,16 @@ function detectParticipantState(
   content: string,
   messageId: string,
   role: 'actor' | 'actee',
+  roleAnchorsOverride?: string[],
 ): ParticipantState {
   const normalized = content.toLowerCase()
   const state = createBaselineParticipantState(messageId)
   let matched = false
 
   const roleAnchors =
+    roleAnchorsOverride && roleAnchorsOverride.length > 0
+      ? roleAnchorsOverride
+      :
     role === 'actor'
       ? ['he', 'she', 'they', 'his', 'her', 'their', 'partner', 'man', 'woman']
       : ['you', 'your', 'yours', 'yourself']
@@ -2336,8 +2380,31 @@ function detectParticipantState(
     focus: -22,
     steadiness: -10,
   })
+  if (role === 'actor') {
+    scopedCue(/\b(thickening|hardening|swelling with release|release building|closer to the edge)\b/i, {
+      arousal: 18,
+      focus: 8,
+      steadiness: -6,
+    })
+    scopedCue(/\b(on the same edge)\b/i, {
+      arousal: 10,
+      focus: 4,
+      steadiness: -4,
+    })
+  } else {
+    scopedCue(/\b(body tightening|tightening in response|release washes over|moans around|swallows (him|her|them) down)\b/i, {
+      arousal: 16,
+      steadiness: -8,
+      focus: 6,
+    })
+    scopedCue(/\b(on the same edge)\b/i, {
+      arousal: 10,
+      focus: 4,
+      steadiness: -4,
+    })
+  }
 
-  if (!matched) {
+  if (!matched && (!roleAnchorsOverride || roleAnchorsOverride.length === 0)) {
     const genericCueMap: Array<
       [RegExp, { arousal?: number; energy?: number; steadiness?: number; focus?: number }]
     > = [
@@ -2384,7 +2451,10 @@ function inferUserLikelySide(content: string): 'actor' | 'actee' {
   return 'actee'
 }
 
-function inferTrackedParticipantLikelySide(content: string, trackedReferences: string[]): 'actor' | 'actee' {
+function inferTrackedParticipantLikelySideByHeuristic(
+  content: string,
+  trackedReferences: string[],
+): 'actor' | 'actee' {
   const normalized = content.toLowerCase()
 
   for (const reference of trackedReferences) {
@@ -2407,6 +2477,65 @@ function inferTrackedParticipantLikelySide(content: string, trackedReferences: s
   }
 
   return inferUserLikelySide(content)
+}
+
+function inferTrackedParticipantLikelySide(content: string, trackedReferences: string[]): 'actor' | 'actee' {
+  const normalized = content.toLowerCase()
+  const actorVerbPattern =
+    'thrust|stroke|grind|lick|suck|ride|press|fuck|tease|rub|kiss|slide|swallow|take|work|guide|curl|pump|roll|rock|bounce|move|set|control|pull|push'
+  const acteeResponsePattern =
+    'thickening|hardening|swelling with release|release building|closer to the edge|body tightening|tightening in response|release washes over|filled|stretched|clenching|fluttering|wrapped around|around'
+  let actorScore = 0
+  let acteeScore = 0
+
+  for (const reference of trackedReferences) {
+    const escaped = escapeRegExp(reference.toLowerCase())
+
+    if (
+      new RegExp(
+        `\\b${escaped}\\b[^.!?]{0,32}\\b(${actorVerbPattern})(?:s|ing)?\\b`,
+        'i',
+      ).test(normalized)
+    ) {
+      actorScore += 3
+    }
+
+    if (
+      new RegExp(
+        `\\b(${actorVerbPattern})(?:s|ing)?\\b[^.!?]{0,28}\\b${escaped}\\b`,
+        'i',
+      ).test(normalized)
+    ) {
+      acteeScore += 2
+    }
+
+    if (
+      new RegExp(
+        `\\b${escaped}\\b[^.!?]{0,32}\\b(${acteeResponsePattern})\\b`,
+        'i',
+      ).test(normalized)
+    ) {
+      acteeScore += 3
+    }
+
+    if (
+      new RegExp(`\\b(into|against|on|over|beneath|inside|toward)\\s+${escaped}\\b`, 'i').test(
+        normalized,
+      )
+    ) {
+      acteeScore += 2
+    }
+  }
+
+  if (actorScore > acteeScore) {
+    return 'actor'
+  }
+
+  if (acteeScore > actorScore) {
+    return 'actee'
+  }
+
+  return inferTrackedParticipantLikelySideByHeuristic(content, trackedReferences)
 }
 
 function buildCustomZonePattern(customZone: string): RegExp {
@@ -2445,6 +2574,117 @@ function containsAnyReference(text: string, references: string[]): boolean {
   })
 }
 
+function normalizePossessiveOwner(reference: string): string {
+  return reference
+    .trim()
+    .toLowerCase()
+    .replace(/'s$/, '')
+}
+
+function hasExplicitMismatchingOwnedZonePronoun(
+  text: string,
+  zone: UserContactZone,
+  customZone: string,
+  possessiveReferences: string[],
+): boolean {
+  const normalized = text.toLowerCase()
+  const zoneTerms = getUserZoneTerms(zone, customZone)
+  const zonePattern = new RegExp(zoneTerms.source, 'gi')
+  const trackedPronouns = new Set(
+    possessiveReferences
+      .map(normalizePossessiveOwner)
+      .filter((reference) => /^(your|his|her|their|my)$/.test(reference)),
+  )
+
+  if (trackedPronouns.size === 0) {
+    return false
+  }
+
+  for (const match of normalized.matchAll(zonePattern)) {
+    const matchIndex = match.index ?? 0
+    const start = Math.max(0, matchIndex - 40)
+    const end = Math.min(normalized.length, matchIndex + match[0].length + 24)
+    const localWindow = normalized.slice(start, end)
+    const zoneOffset = matchIndex - start
+    const prefixWindow = localWindow.slice(
+      Math.max(0, zoneOffset - 24),
+      Math.min(localWindow.length, zoneOffset + match[0].length),
+    )
+    const nearestOwnerMatch = prefixWindow.match(
+      /\b(your|my|his|her|their)\b(?:\s+\w+){0,2}\s+\b([a-z][a-z'-]+)\b/i,
+    )
+    const nearestOwner =
+      nearestOwnerMatch && nearestOwnerMatch[2]?.toLowerCase() === match[0].toLowerCase()
+        ? normalizePossessiveOwner(nearestOwnerMatch[1])
+        : null
+
+    if (nearestOwner != null && !trackedPronouns.has(nearestOwner)) {
+      return true
+    }
+  }
+
+  return false
+}
+
+function hasTrackedGenitalReference(text: string, userReferences: string[]): boolean {
+  const normalized = text.toLowerCase()
+  const actorReferencePattern =
+    userReferences.length > 0
+      ? new RegExp(
+          `\\b(${userReferences
+            .map((reference) => escapeRegExp(reference.toLowerCase()))
+            .join('|')})\\b`,
+          'i',
+        )
+      : /\b(you|your|yours|yourself)\b/i
+
+  const explicitTrackedGenitalPattern =
+    /\b(your\s+(cock|dick|penis|shaft)|cock|dick|penis|shaft)\b/i
+  const impliedTrackedGenitalPattern =
+    /\b(head|tip|length)\b/i
+
+  if (
+    explicitTrackedGenitalPattern.test(normalized) ||
+    (actorReferencePattern.test(normalized) && impliedTrackedGenitalPattern.test(normalized)) ||
+    userReferences.some((reference) => {
+      const escapedReference = escapeRegExp(reference.toLowerCase())
+      return new RegExp(
+        `\\b${escapedReference}(?:'s)?\\b[^.!?]{0,18}\\b(cock|dick|penis|shaft|head|tip|length)\\b`,
+        'i',
+      ).test(normalized)
+    })
+  ) {
+    return true
+  }
+
+  const objectLikeReferences = userReferences.filter(
+    (reference) => !/^(his|your|yours|yourself|he)$/i.test(reference.trim()),
+  )
+
+  if (objectLikeReferences.length === 0) {
+    return false
+  }
+
+  const objectReferencePattern = objectLikeReferences
+    .map((reference) => escapeRegExp(reference.toLowerCase()))
+    .join('|')
+
+  return (
+    new RegExp(
+      `\\b(${objectReferencePattern})\\b[^.!?]{0,24}\\b(against|on|in|between|through|around)\\b[^.!?]{0,12}\\b(tongue|mouth|lips|throat)\\b`,
+      'i',
+    ).test(normalized) ||
+    new RegExp(
+      `\\b(mouth|tongue|lips|throat)\\b[^.!?]{0,24}\\b(${objectReferencePattern})\\b`,
+      'i',
+    ).test(normalized) ||
+    new RegExp(
+      `\\b(work(?:s|ing)?|swallow(?:s|ing)?|taste(?:s|ing)?|moan(?:s|ing)?\\s+around|take(?:s|ing)?)\\b[^.!?]{0,20}\\b(${objectReferencePattern})\\b`,
+      'i',
+    ).test(normalized)
+  )
+}
+
 function containsUserOwnedZoneReference(
   text: string,
   zone: UserContactZone,
@@ -2461,19 +2701,28 @@ function containsUserOwnedZoneReference(
     const end = Math.min(normalized.length, matchIndex + match[0].length + 24)
     const localWindow = normalized.slice(start, end)
     const zoneOffset = matchIndex - start
+    const zoneToken = escapeRegExp(match[0].toLowerCase())
+    const prefixWindow = localWindow.slice(
+      Math.max(0, zoneOffset - 24),
+      Math.min(localWindow.length, zoneOffset + match[0].length),
+    )
+    const nearestOwnerMatch = prefixWindow.match(/\b(your|my|his|her|their|[a-z][a-z'-]+(?:'s)?)\b(?:\s+\w+){0,2}\s+\b([a-z][a-z'-]+)\b/i)
+    const nearestOwner =
+      nearestOwnerMatch && nearestOwnerMatch[2]?.toLowerCase() === match[0].toLowerCase()
+        ? normalizePossessiveOwner(nearestOwnerMatch[1])
+        : null
 
     const hasPossessiveReference = possessiveReferences.some((reference) => {
       const escaped = escapeRegExp(reference.toLowerCase())
-      const zoneToken = escapeRegExp(match[0].toLowerCase())
+      const normalizedOwner = normalizePossessiveOwner(reference)
+      if (nearestOwner != null && nearestOwner !== normalizedOwner) {
+        return false
+      }
       const ownedZonePattern = new RegExp(`\\b${escaped}\\b(?:\\s+\\w+){0,2}\\s+\\b${zoneToken}\\b`, 'i')
       if (ownedZonePattern.test(localWindow)) {
         return true
       }
 
-      const prefixWindow = localWindow.slice(
-        Math.max(0, zoneOffset - 22),
-        Math.min(localWindow.length, zoneOffset + match[0].length),
-      )
       return new RegExp(`\\b${escaped}\\b(?:\\s+\\w+){0,1}\\s+\\b${zoneToken}\\b`, 'i').test(prefixWindow)
     })
 
@@ -2644,11 +2893,22 @@ function containsPenetrationIntoOwnedZone(
     return false
   }
 
+  if (
+    hasExplicitMismatchingOwnedZonePronoun(text, zone, customZone, possessiveReferences) &&
+    !(zone === 'genitals' && hasTrackedGenitalReference(text, trackedReferences))
+  ) {
+    return false
+  }
+
   if (!penetrationPattern.test(normalized)) {
     return false
   }
 
-  for (const reference of trackedReferences) {
+  const ownershipSafeReferences = trackedReferences.filter(
+    (reference) => !/^(his|him|he|her|hers|she|their|theirs|they|your|yours|yourself|you)$/i.test(reference.trim()),
+  )
+
+  for (const reference of ownershipSafeReferences) {
     const escapedReference = escapeRegExp(reference.toLowerCase())
 
     if (
@@ -2766,8 +3026,13 @@ function rankZoneScopedActionHints(
     userReferences ?? [],
   )
   const contentHasMountedRide = zone === 'genitals' && hasMountedRideContext(content)
+  const hasNonGenitalPenetrator = hasExplicitNonGenitalPenetratorObject(content)
 
-  if (hasActorPenetration || hasTrackedZonePenetration) {
+  if (hasTrackedZonePenetration && hasNonGenitalPenetrator) {
+    addScore('finger', 12)
+    addScore('thrust', -12)
+    addScore('stroke', -8)
+  } else if (hasActorPenetration || hasTrackedZonePenetration) {
     addScore('thrust', 12)
   }
 
@@ -2787,6 +3052,12 @@ function rankZoneScopedActionHints(
     const hasMouthCue = /\b(mouth|lips|tongue|throat|oral)\b/i.test(windowText)
     const hasHandCue = /\b(hand|hands|fingers|palm|grip|wrapped|wraps|stroking by hand)\b/i.test(windowText)
     const hasGenitalCue = /\b(cock|dick|penis|shaft|head|tip|length)\b/i.test(windowText)
+    const hasTrackedGenitalCue = hasTrackedGenitalReference(windowText, userReferences ?? [])
+    const hasFingerPenetrationCue =
+      /\b(finger|fingers|fingering|knuckle|digits?)\b/i.test(windowText) &&
+      /\b(inside|enter|curl|scissor|pump|pressing against that spot|that spot inside|working inside)\b/i.test(
+        windowText,
+      )
     const hasDirectTrackedZoneContext = clauseHasDirectTrackedZoneContact(
       windowText,
       zone,
@@ -2803,7 +3074,11 @@ function rankZoneScopedActionHints(
     const hasMountedRide = hasMountedRideContext(windowText)
 
     const allowOralTrackedGenital =
-      zone !== 'genitals' || (hasDirectTrackedZoneContext && hasGenitalCue)
+      zone !== 'genitals' ||
+      hasTrackedGenitalCue ||
+      (hasDirectTrackedZoneContext && hasGenitalCue)
+    const allowFingerTrackedZone =
+      zone !== 'genitals' || hasDirectTrackedZoneContext || hasTrackedGenitalCue
 
     if (allowOralTrackedGenital && /\b(suck|sucking|suction)\b/i.test(windowText)) addScore('suction', 5)
     if (
@@ -2819,9 +3094,26 @@ function rankZoneScopedActionHints(
     if (allowOralTrackedGenital && /\b(tongue|tonguing|lick|licking|lips)\b/i.test(windowText)) addScore('lick', 4)
     if (allowOralTrackedGenital && /\b(mouth)\b/i.test(windowText)) addScore('lick', 2)
 
-    if (/\b(finger|fingers|fingering|knuckle|digits?)\b/i.test(windowText)) addScore('finger', 5)
-    if (/\b(hand|hands)\b/i.test(windowText) && /\b(inside|enter|curl|scissor|pump)\b/i.test(windowText)) {
+    if (
+      allowFingerTrackedZone &&
+      /\b(finger|fingers|fingering|knuckle|digits?)\b/i.test(windowText) &&
+      /\b(inside|enter|curl|scissor|pump|pressing against that spot|that spot inside|working inside|between her legs|between his legs|between their legs)\b/i.test(
+        windowText,
+      )
+    ) {
+      addScore('finger', 5)
+    }
+    if (
+      allowFingerTrackedZone &&
+      /\b(hand|hands)\b/i.test(windowText) &&
+      /\b(inside|enter|curl|scissor|pump|working inside)\b/i.test(windowText)
+    ) {
       addScore('finger', 4)
+    }
+    if (allowFingerTrackedZone && hasFingerPenetrationCue) {
+      addScore('finger', 8)
+      addScore('thrust', -10)
+      addScore('stroke', -6)
     }
 
     if (/\b(stroke|stroking|pump|pumping)\b/i.test(windowText) && hasHandCue) addScore('stroke', 4)
@@ -2837,16 +3129,17 @@ function rankZoneScopedActionHints(
       addScore('stroke', -4)
     }
 
-    if (/\b(thrust|thrusting|slide|sliding)\b/i.test(windowText)) addScore('thrust', 3)
+    if (/\b(thrust|thrusting|slide|sliding)\b/i.test(windowText) && !hasFingerPenetrationCue) addScore('thrust', 3)
     if (
-      containsActorGenitalPenetration(windowText, zone, userReferences ?? []) ||
-      containsPenetrationIntoOwnedZone(
-        windowText,
-        zone,
-        customZone,
-        possessiveReferences ?? [],
-        userReferences ?? [],
-      )
+      !hasFingerPenetrationCue &&
+      (containsActorGenitalPenetration(windowText, zone, userReferences ?? []) ||
+        containsPenetrationIntoOwnedZone(
+          windowText,
+          zone,
+          customZone,
+          possessiveReferences ?? [],
+          userReferences ?? [],
+        ))
     ) {
       addScore('thrust', 7)
     }
@@ -2911,18 +3204,20 @@ function splitZoneRelevantClauses(
 
   for (const sentence of sentences) {
     const sentenceLower = sentence.toLowerCase()
+    const sentenceHasTrackedGenitalCue = hasTrackedGenitalReference(sentence, userReferences)
     const sentenceRelevant =
-      containsAnyReference(sentence, userReferences) &&
-      ((zoneTerms.test(sentenceLower) &&
-        (containsUserOwnedZoneReference(sentence, zone, customZone, possessiveReferences) ||
-          containsPenetrationIntoOwnedZone(
-            sentence,
-            zone,
-            customZone,
-            possessiveReferences,
-            userReferences,
-          ))) ||
-        containsActorGenitalPenetration(sentence, zone, userReferences))
+      (containsAnyReference(sentence, userReferences) &&
+        ((zoneTerms.test(sentenceLower) &&
+          (containsUserOwnedZoneReference(sentence, zone, customZone, possessiveReferences) ||
+            containsPenetrationIntoOwnedZone(
+              sentence,
+              zone,
+              customZone,
+              possessiveReferences,
+              userReferences,
+            ))) ||
+          containsActorGenitalPenetration(sentence, zone, userReferences))) ||
+      (zone === 'genitals' && sentenceHasTrackedGenitalCue)
 
     if (!sentenceRelevant) {
       continue
@@ -2957,21 +3252,38 @@ function splitZoneRelevantClauses(
       const clauseHasGenitalCue = /\b(cock|dick|penis|shaft|head|tip|length|clit|clitoris|pussy|cunt|vagina|entrance|underside|ridge)\b/i.test(
         clause,
       )
+      const clauseHasTrackedGenitalCue = hasTrackedGenitalReference(clause, userReferences)
+      const clauseHasForeignOwnedZone = hasExplicitMismatchingOwnedZonePronoun(
+        clause,
+        zone,
+        customZone,
+        possessiveReferences,
+      )
 
-      if (zone === 'genitals' && clauseHasOralCue && !clauseHasDirectZoneContact && !clauseHasGenitalCue) {
+      if (
+        zone === 'genitals' &&
+        clauseHasOralCue &&
+        !clauseHasDirectZoneContact &&
+        !clauseHasTrackedGenitalCue
+      ) {
+        continue
+      }
+
+      if (clauseHasForeignOwnedZone && !(zone === 'genitals' && clauseHasTrackedGenitalCue)) {
         continue
       }
 
       if (
         isQuotedClause(clause) &&
-        (!hasPresentPhysicalExecutionCue(clause) || (!clauseHasDirectZoneContact && !clauseHasGenitalCue))
+        (!hasPresentPhysicalExecutionCue(clause) ||
+          (!clauseHasDirectZoneContact &&
+            !(zone === 'genitals' ? clauseHasTrackedGenitalCue : clauseHasGenitalCue)))
       ) {
         continue
       }
 
       const clauseRelevant =
-        containsAnyReference(clause, userReferences) ||
-        zoneTerms.test(clause.toLowerCase()) ||
+        clauseHasDirectZoneContact ||
         containsActorGenitalPenetration(clause, zone, userReferences) ||
         containsPenetrationIntoOwnedZone(
           clause,
@@ -2979,9 +3291,10 @@ function splitZoneRelevantClauses(
           customZone,
           possessiveReferences,
           userReferences,
-        )
+        ) ||
+        (zone === 'genitals' && clauseHasTrackedGenitalCue)
 
-      if (clauseRelevant || sentenceRelevant) {
+      if (clauseRelevant) {
         acceptedClauses.push({ clause, sentence })
       }
     }
@@ -2996,8 +3309,14 @@ function buildClauseActionCueMap(clause: string): Map<ActionType, number> {
   const addCue = (actionType: ActionType, amount: number) => {
     cues.set(actionType, Math.max(cues.get(actionType) ?? 0, amount))
   }
+  const hasFingerPenetrationCue =
+    /\b(finger|fingers|fingering|knuckle|digits?)\b/i.test(normalized) &&
+    /\b(inside|enter|curl|scissor|pump|pressing against that spot|that spot inside|working inside)\b/i.test(
+      normalized,
+    )
 
   if (
+    !hasFingerPenetrationCue &&
     /\b(stroke|strokes|deep thrust|deep thrusts|thrust|thrusts|pistons?|bottom(?:ing)? out|fill(?:s|ing)? her again|sink(?:s|ing)? back|inside me|inside her|inside him|inside them|to the hilt|buried)\b/i.test(
       normalized,
     )
@@ -3014,11 +3333,19 @@ function buildClauseActionCueMap(clause: string): Map<ActionType, number> {
   if (/\b(lick|licks|tongue tracing|tongue sweeping|tongue darting|tracing)\b/i.test(normalized)) {
     addCue('lick', 4)
   }
-  if (/\b(finger|fingers|fingering|knuckle|digits?)\b/i.test(normalized)) {
+  if (
+    /\b(finger|fingers|fingering|knuckle|digits?)\b/i.test(normalized) &&
+    /\b(inside|enter|curl|scissor|pump|pressing against that spot|that spot inside|working inside|between her legs|between his legs|between their legs)\b/i.test(
+      normalized,
+    )
+  ) {
     addCue('finger', 5)
   }
-  if (/\b(hand|hands)\b/i.test(normalized) && /\b(inside|enter|curl|scissor|pump)\b/i.test(normalized)) {
+  if (/\b(hand|hands)\b/i.test(normalized) && /\b(inside|enter|curl|scissor|pump|working inside)\b/i.test(normalized)) {
     addCue('finger', 4)
+  }
+  if (hasFingerPenetrationCue) {
+    addCue('finger', 6)
   }
   if (
     /\b(ride|rides|riding|rode|straddle|straddles|straddling|bounce|bounces|bouncing|buck|bucks|bucking|rock|rocks|rocking|twerk|twerks|twerking|twerked)\b/i.test(
@@ -3032,7 +3359,7 @@ function buildClauseActionCueMap(clause: string): Map<ActionType, number> {
   if (hasMountedRideContext(normalized) && !/\b(grind|grinds|grinding|circle|circles|circular|rolling)\b/i.test(normalized)) {
     addCue('ride', 6)
   }
-  if (/\b(stroke|stroking|hand|hands|fingers|grip|wrapped)\b/i.test(normalized)) {
+  if (!hasFingerPenetrationCue && /\b(stroke|stroking|hand|hands|fingers|grip|wrapped)\b/i.test(normalized)) {
     addCue('stroke', 4)
   }
   if (/\b(grind|grinds|grinding|circle|circular|rolling)\b/i.test(normalized)) {
@@ -3062,6 +3389,19 @@ function inferActionTypesFromClause(
   if (isQuotedClause(clause) && !hasPresentPhysicalExecutionCue(clause)) {
     return []
   }
+
+  const clauseHasDirectTrackedZoneContext = clauseHasDirectTrackedZoneContact(
+    clause,
+    zone,
+    customZone,
+    userReferences,
+    possessiveReferences,
+  )
+  const clauseHasTrackedGenitalCue = hasTrackedGenitalReference(clause, userReferences)
+  const filterFingerForTrackedZone = (actionTypes: ActionType[]): ActionType[] =>
+    zone === 'genitals' && !clauseHasDirectTrackedZoneContext && !clauseHasTrackedGenitalCue
+      ? actionTypes.filter((actionType) => actionType !== 'finger')
+      : actionTypes
 
   if (hasExplicitPauseCue(clause)) {
     return ['pause']
@@ -3093,7 +3433,8 @@ function inferActionTypesFromClause(
   const hintedFromClause = clauseRanked.filter((entry) => entry.score >= 3)
   if (hintedFromClause.length > 0) {
     const topScore = hintedFromClause[0]?.score ?? 0
-    const actionTypes = dedupeActionTypes(
+    const actionTypes = filterFingerForTrackedZone(
+      dedupeActionTypes(
       hintedFromClause
         .filter(
           (entry) =>
@@ -3101,6 +3442,7 @@ function inferActionTypesFromClause(
             (cueMap.has(entry.actionType) || entry.actionType === hintedFromClause[0]?.actionType),
         )
         .map((entry) => entry.actionType),
+      ),
     )
     if (
       zone === 'genitals' &&
@@ -3126,7 +3468,7 @@ function inferActionTypesFromClause(
     .map((entry) => entry.actionType)
 
   if (inheritedActionTypes.length > 0) {
-    const actionTypes = dedupeActionTypes(inheritedActionTypes)
+    const actionTypes = filterFingerForTrackedZone(dedupeActionTypes(inheritedActionTypes))
     if (
       zone === 'genitals' &&
       hasMountedRideContext(clause) &&
@@ -3144,7 +3486,7 @@ function inferActionTypesFromClause(
     .map(([actionType]) => actionType)
 
   if (fallbackCueTypes.length > 0) {
-    const actionTypes = dedupeActionTypes(fallbackCueTypes)
+    const actionTypes = filterFingerForTrackedZone(dedupeActionTypes(fallbackCueTypes))
     if (
       zone === 'genitals' &&
       hasMountedRideContext(clause) &&
@@ -3514,6 +3856,148 @@ function findContactLinkedCharacterProfiles(
   return characterProfiles.slice(0, 1)
 }
 
+function buildProfileNameHints(profile: ParticipantProfile | null | undefined): string[] {
+  if (!profile) return []
+
+  const hints = [profile.displayName, ...profile.aliasHints]
+  for (const token of profile.displayName.split(/\s+/)) {
+    if (token.trim().length >= 2) {
+      hints.push(token.trim())
+    }
+  }
+
+  return [...new Set(hints.map((hint) => hint.trim()).filter((hint) => hint.length > 0))]
+}
+
+function getActionAgencyCuePattern(actionType: ActionType): RegExp {
+  switch (actionType) {
+    case 'suction':
+      return /\b(work(?:s|ing)?|suck(?:s|ing)?|swallow(?:s|ing)?|take(?:s|ing)?\s+\w+\s+deep|mouth(?:ing)?|taste(?:s|ing)?|clean(?:s|ing)?|moan(?:s|ing)?\s+around)\b/i
+    case 'lick':
+      return /\b(lick(?:s|ing)?|tongue\s+(?:tracing|sweeping|darting|working)|trace(?:s|ing)?)\b/i
+    case 'finger':
+      return /\b(finger(?:s|ing)?|knuckle(?:s)?|digit(?:s)?|curl(?:s|ing)?|pump(?:s|ing)?|work(?:s|ing)?\s+(?:between|inside))\b/i
+    case 'ride':
+      return /\b(ride(?:s|ing)?|straddle(?:s|ing)?|bounce(?:s|ing)?|rock(?:s|ing)?|twerk(?:s|ing)?|roll(?:s|ing)?\s+\w*\s*hips|settle(?:s|ing)?|lower(?:s|ing)?\s+(?:herself|himself|themself)|sink(?:s|ing)?\s+onto)\b/i
+    case 'thrust':
+      return /\b(thrust(?:s|ing)?|press(?:es|ing)?|push(?:es|ing)?|slide(?:s|ing)?|sink(?:s|ing)?\s+back|fill(?:s|ing)?|bottom(?:ing)?\s+out|bury|buries|fuck(?:s|ing)?)\b/i
+    case 'stroke':
+      return /\b(stroke(?:s|ing)?|hand(?:s)?\s+(?:working|stroking)|grip(?:s|ping)?|wrapped)\b/i
+    case 'grind':
+      return /\b(grind(?:s|ing)?|circle(?:s|ing)?|roll(?:s|ing)?)\b/i
+    case 'tease':
+      return /\b(tease(?:s|ing)?)\b/i
+    case 'pulse':
+      return /\b(pulse(?:s|ing)?|throb(?:s|bing)?)\b/i
+    case 'squeeze':
+      return /\b(squeeze(?:s|ing)?|clench(?:es|ing)?)\b/i
+    case 'pause':
+      return /\b(pause|still|stop|hold)\b/i
+    default:
+      return /\b(work(?:s|ing)?|move(?:s|ing)?|press(?:es|ing)?|guide(?:s|ing)?)\b/i
+  }
+}
+
+function hasNamedActionAgency(
+  clause: string,
+  references: string[],
+  actionType: ActionType,
+): boolean {
+  if (references.length === 0) return false
+
+  const cuePattern = getActionAgencyCuePattern(actionType)
+  const alternation = references
+    .map((reference) => escapeRegExp(reference.toLowerCase()))
+    .join('|')
+
+  if (!alternation) return false
+
+  return new RegExp(
+    `\\b(?:${alternation})\\b[^.!?]{0,36}${cuePattern.source}|${cuePattern.source}[^.!?]{0,28}\\b(?:${alternation})\\b`,
+    'i',
+  ).test(clause.toLowerCase())
+}
+
+function inferTrackedDominantSideFromActionMemory(
+  content: string,
+  participantProfiles: ParticipantProfileBundle,
+  chatPreferences: ChatTrackingPreferences,
+  zone: UserContactZone,
+  customZone: string,
+): 'actor' | 'actee' | null {
+  const trackedProfile = resolveTrackedParticipantProfile(participantProfiles, chatPreferences)
+  if (!trackedProfile) return null
+
+  const trackedReferences = buildTrackedReferenceHints(participantProfiles, chatPreferences)
+  const possessiveReferences = buildTrackedPossessiveReferenceHints(participantProfiles, chatPreferences)
+  const clauses = splitZoneRelevantClauses(
+    content,
+    zone,
+    customZone,
+    trackedReferences,
+    possessiveReferences,
+  )
+
+  if (clauses.length === 0) {
+    return null
+  }
+
+  const trackedNameHints = buildProfileNameHints(trackedProfile)
+  const counterpartyProfiles: ParticipantProfile[] = [
+    ...participantProfiles.characterProfiles.filter(
+      (profile) => profile.participantId !== trackedProfile.participantId,
+    ),
+    ...(participantProfiles.userProfile &&
+    participantProfiles.userProfile.participantId !== trackedProfile.participantId
+      ? [participantProfiles.userProfile]
+      : []),
+  ]
+  const counterpartyHints = counterpartyProfiles.flatMap((profile) => buildProfileNameHints(profile))
+  const actionMemory = new Map<ActionType, 'actor' | 'actee'>()
+  let actorScore = 0
+  let acteeScore = 0
+
+  for (const entry of clauses) {
+    const actionTypes = inferActionTypesFromClause(
+      entry.clause,
+      entry.sentence,
+      zone,
+      customZone,
+      trackedReferences,
+      possessiveReferences,
+    )
+
+    for (const actionType of actionTypes) {
+      const explicitSide = hasNamedActionAgency(entry.clause, trackedNameHints, actionType)
+        ? 'actor'
+        : hasNamedActionAgency(entry.clause, counterpartyHints, actionType)
+          ? 'actee'
+          : null
+      const resolvedSide = explicitSide ?? actionMemory.get(actionType) ?? null
+
+      if (explicitSide) {
+        actionMemory.set(actionType, explicitSide)
+      }
+
+      if (resolvedSide === 'actor') {
+        actorScore += 1
+      } else if (resolvedSide === 'actee') {
+        acteeScore += 1
+      }
+    }
+  }
+
+  if (actorScore > acteeScore) {
+    return 'actor'
+  }
+
+  if (acteeScore > actorScore) {
+    return 'actee'
+  }
+
+  return null
+}
+
 function buildParticipantStateAssignments(
   messageId: string,
   content: string,
@@ -3536,12 +4020,28 @@ function buildParticipantStateAssignments(
     return []
   }
 
-  const actorTemplate = detectParticipantState(content, messageId, 'actor')
-  const acteeTemplate = detectParticipantState(content, messageId, 'actee')
-  const assignments: ParticipantStateAssignment[] = []
-
   const trackedProfile = resolveTrackedParticipantProfile(participantProfiles, chatPreferences)
-  const trackedSide = inferTrackedParticipantLikelySide(content, trackedReferences)
+  const trackedSide =
+    inferTrackedDominantSideFromActionMemory(
+      content,
+      participantProfiles,
+      chatPreferences,
+      primaryUserContactZone,
+      customUserContactZone,
+    ) ?? inferTrackedParticipantLikelySide(content, trackedReferences)
+  const actorTemplate = detectParticipantState(
+    content,
+    messageId,
+    'actor',
+    trackedSide === 'actor' ? trackedReferences : undefined,
+  )
+  const acteeTemplate = detectParticipantState(
+    content,
+    messageId,
+    'actee',
+    trackedSide === 'actee' ? trackedReferences : undefined,
+  )
+  const assignments: ParticipantStateAssignment[] = []
   const includeUserCounterparty =
     trackedProfile?.participantKind === 'character' &&
     participantProfiles.userProfile != null &&

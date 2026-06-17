@@ -773,6 +773,18 @@ function buildUserPossessiveReferenceHints(participantProfiles: ParticipantProfi
   return [...new Set(hints)]
 }
 
+function sanitizeNarrativeContent(content: string): string {
+  return content
+    .replace(/<details[\s\S]*?<\/details>/gi, ' ')
+    .replace(/<summary[\s\S]*?<\/summary>/gi, ' ')
+    .replace(/<\/?font[^>]*>/gi, ' ')
+    .replace(/<br\s*\/?>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
 function resolveTrackedParticipantProfile(
   participantProfiles: ParticipantProfileBundle,
   chatPreferences: ChatTrackingPreferences,
@@ -2414,14 +2426,14 @@ function buildCustomZonePattern(customZone: string): RegExp {
 function getUserZoneTerms(zone: UserContactZone, customZone: string): RegExp {
   switch (zone) {
     case 'anus':
-      return /\b(anus|asshole|hole|rear|backdoor)\b/
+      return /\b(anus|ass|asshole|backdoor|rear|rim|rear entrance)\b/
     case 'mouth':
       return /\b(mouth|lips|tongue|throat)\b/
     case 'custom':
       return buildCustomZonePattern(customZone)
     case 'genitals':
     default:
-      return /\b(cock|dick|clit|clitoris|pussy|cunt|vagina|penis|shaft|tip|entrance|length|underside|ridge)\b/
+      return /\b(cock|dick|clit|clitoris|pussy|cunt|vagina|penis|shaft|tip|length|underside|ridge|labia|folds)\b/
   }
 }
 
@@ -2570,10 +2582,26 @@ function containsActorGenitalPenetration(
     return false
   }
 
+  const explicitTrackedGenitalPattern =
+    /\b(your\s+(cock|dick|penis|shaft)|cock|dick|penis|shaft)\b/i
+  const impliedTrackedGenitalPattern =
+    /\b(head|tip|length)\b/i
+  const hasTrackedGenitalAnchor =
+    explicitTrackedGenitalPattern.test(normalized) ||
+    impliedTrackedGenitalPattern.test(normalized) ||
+    userReferences.some((reference) => {
+      const escapedReference = escapeRegExp(reference.toLowerCase())
+      return new RegExp(
+        `\\b${escapedReference}(?:'s)?\\b[^.!?]{0,18}\\b(cock|dick|penis|shaft|head|tip|length)\\b`,
+        'i',
+      ).test(normalized)
+    })
+
   return (
-    /\b(press(?:es|ing)?|push(?:es|ing)?|slide(?:s|ing)?|thrust(?:s|ing)?|sink(?:s|ing)?|bury|buries|enter(?:s|ing)?|penetrat(?:e|es|ing)|fuck(?:s|ing)?)\b[^.!?]{0,36}\b(into|inside|in)\b[^.!?]{0,24}\b(her|him|them|body|hole|pussy|cunt|ass|anus|mouth|throat)\b/i.test(
-      normalized,
-    ) ||
+    (hasTrackedGenitalAnchor &&
+      /\b(press(?:es|ing)?|push(?:es|ing)?|slide(?:s|ing)?|thrust(?:s|ing)?|sink(?:s|ing)?|bury|buries|enter(?:s|ing)?|penetrat(?:e|es|ing)|fuck(?:s|ing)?)\b[^.!?]{0,36}\b(into|inside|in)\b[^.!?]{0,24}\b(her|him|them|body|hole|pussy|cunt|ass|anus|mouth|throat)\b/i.test(
+        normalized,
+      )) ||
     /\b(your\s+(cock|dick|penis|shaft)|cock|dick|penis|shaft)\b[^.!?]{0,50}\b(parts?|push(?:es|ing)?|press(?:es|ing)?|slides?|sliding|sinks?|sinking|buries?|enter(?:s|ing)?|disappears?|fill(?:s|ing)?|seat(?:s|ed|ing)?)\b/i.test(
       normalized,
     ) ||
@@ -2593,6 +2621,22 @@ function containsPenetrationIntoOwnedZone(
   const normalized = text.toLowerCase()
   const zoneTerms = getUserZoneTerms(zone, customZone)
   const zonePattern = new RegExp(zoneTerms.source, 'gi')
+  const trackedReferenceTargetTerms =
+    zone === 'genitals'
+      ? 'pussy|cunt|vagina|heat|entrance|folds|walls|depths?|labia'
+      : zone === 'anus'
+        ? 'ass|anus|asshole|backdoor|rear|rim|hole|entrance|walls|depths?'
+      : zone === 'mouth'
+        ? 'mouth|lips|tongue|throat'
+        : 'body|hole|mouth|throat|heat|entrance|folds|walls|rim|depths?'
+  const trackedPossessiveZoneTerms =
+    zone === 'genitals'
+      ? 'heat|entrance|folds|walls|depths?|pussy|cunt|vagina|labia|slick\\s+heat|wet\\s+heat'
+      : zone === 'anus'
+        ? 'ass|anus|asshole|backdoor|rear|rim|hole|entrance|walls|depths?'
+      : zone === 'mouth'
+        ? 'mouth|lips|tongue|throat'
+        : 'heat|entrance|folds|walls|rim|depths?|hole|body|inside|slick\\s+heat|wet\\s+heat'
   const penetrationPattern =
     /\b(press(?:es|ing)?|push(?:es|ing)?|slide(?:s|ing)?|thrust(?:s|ing)?|sink(?:s|ing)?|bury|buries|enter(?:s|ing)?|penetrat(?:e|es|ing)|fuck(?:s|ing)?|fill(?:s|ing)?|stretch(?:es|ing)?)\b/i
 
@@ -2609,7 +2653,7 @@ function containsPenetrationIntoOwnedZone(
 
     if (
       new RegExp(
-        `\\b(press(?:es|ing)?|push(?:es|ing)?|slide(?:s|ing)?|thrust(?:s|ing)?|sink(?:s|ing)?|bury|buries|enter(?:s|ing)?|penetrat(?:e|es|ing)|fuck(?:s|ing)?|fill(?:s|ing)?|stretch(?:es|ing)?)\\b[^.!?]{0,40}\\b(into|inside|in)\\b[^.!?]{0,24}\\b${escapedReference}\\b`,
+        `\\b(press(?:es|ing)?|push(?:es|ing)?|slide(?:s|ing)?|thrust(?:s|ing)?|sink(?:s|ing)?|bury|buries|enter(?:s|ing)?|penetrat(?:e|es|ing)|fuck(?:s|ing)?|fill(?:s|ing)?|stretch(?:es|ing)?)\\b[^.!?]{0,40}\\b(into|inside|in)\\b[^.!?]{0,24}\\b${escapedReference}\\b(?:\\s+\\w+){0,3}\\s+\\b(${trackedReferenceTargetTerms})\\b`,
         'i',
       ).test(normalized)
     ) {
@@ -2618,7 +2662,7 @@ function containsPenetrationIntoOwnedZone(
 
     if (
       new RegExp(
-        `\\b${escapedReference}(?:'s)?\\b[^.!?]{0,36}\\b(heat|entrance|folds|walls|rim|depths?|hole|body|inside|slick\\s+heat|wet\\s+heat)\\b`,
+        `\\b${escapedReference}(?:'s)?\\b[^.!?]{0,36}\\b(${trackedPossessiveZoneTerms})\\b`,
         'i',
       ).test(normalized)
     ) {
@@ -3972,22 +4016,23 @@ async function buildMessagePlan(
     .filter((message) => message.role === 'assistant' || message.role === 'user')
     .map((message) => ({
       role: message.role as 'assistant' | 'user',
-      content: message.content,
+      content: sanitizeNarrativeContent(message.content),
     }))
+  const parsingContent = sanitizeNarrativeContent(selected.content)
   const trackedReferenceHints = buildTrackedReferenceHints(participantProfiles, chatPreferences)
   const trackedPossessiveReferenceHints = buildTrackedPossessiveReferenceHints(
     participantProfiles,
     chatPreferences,
   )
   const hasExecutedTrackedContact = hasExecutedTrackedContactEvidence(
-    selected.content,
+    parsingContent,
     chatPreferences.primaryContactZone,
     chatPreferences.customContactZone,
     trackedReferenceHints,
     trackedPossessiveReferenceHints,
   )
   const deterministicZoneBeats = buildDeterministicZoneScopedBeats(
-    selected.content,
+    parsingContent,
     messageId,
     chatPreferences.primaryContactZone,
     chatPreferences.customContactZone,
@@ -3995,13 +4040,13 @@ async function buildMessagePlan(
     trackedPossessiveReferenceHints,
   )
   const rankedTrackedHints = rankZoneScopedActionHints(
-    selected.content,
+    parsingContent,
     chatPreferences.primaryContactZone,
     chatPreferences.customContactZone,
     trackedReferenceHints,
     trackedPossessiveReferenceHints,
   )
-  const actionType = rankedTrackedHints[0]?.actionType ?? detectActionType(selected.content)
+  const actionType = rankedTrackedHints[0]?.actionType ?? detectActionType(parsingContent)
   const preset =
     settings.actionCalibrationPresets.find((entry) => entry.semanticActionType === actionType) ??
     settings.actionCalibrationPresets[0]
@@ -4020,11 +4065,11 @@ async function buildMessagePlan(
         userId,
         settings,
         chatPreferences,
-        selected.content,
+        parsingContent,
         recentContext,
         participantProfiles,
       ),
-      selected.content,
+      parsingContent,
       chatPreferences.primaryContactZone,
       chatPreferences.customContactZone,
       trackedReferenceHints,
@@ -4153,20 +4198,20 @@ async function buildMessagePlan(
           {
             messageId,
             orderIndex: 0,
-            sourceExcerpt: selected.content,
+            sourceExcerpt: parsingContent,
             actionType: resolvedActionType,
-            strength: detectStrength(selected.content, resolvedPreset),
-            frequency: detectTempo(selected.content, resolvedPreset),
-            durationClass: detectDurationClass(selected.content, resolvedActionType),
-            durationMs: detectDurationMs(selected.content, resolvedActionType),
+            strength: detectStrength(parsingContent, resolvedPreset),
+            frequency: detectTempo(parsingContent, resolvedPreset),
+            durationClass: detectDurationClass(parsingContent, resolvedActionType),
+            durationMs: detectDurationMs(parsingContent, resolvedActionType),
             transitionStyle: 'unknown',
             countHint: 'unknown',
-            persistence: detectPersistence(selected.content, resolvedPreset, playbackModeOverride),
+            persistence: detectPersistence(parsingContent, resolvedPreset, playbackModeOverride),
             responseMode: 'lead',
             actorWeight: 0.5,
             acteeWeight: 0.5,
-            explicitChange: /\b(becomes|turns|shifts|changes|deepens|quickens)\b/i.test(selected.content),
-            explicitStop: /\b(stops|withdraws|pulls away|breaks contact|lets go)\b/i.test(selected.content),
+            explicitChange: /\b(becomes|turns|shifts|changes|deepens|quickens)\b/i.test(parsingContent),
+            explicitStop: /\b(stops|withdraws|pulls away|breaks contact|lets go)\b/i.test(parsingContent),
             fallbackBehavior: 'unknown',
           },
         ]
@@ -4184,7 +4229,7 @@ async function buildMessagePlan(
       ? mapLlmParticipantsToAssignments(
           parsedScene,
           messageId,
-          selected.content,
+          parsingContent,
           participantProfiles,
           chatPreferences,
           chatPreferences.primaryContactZone,
@@ -4192,7 +4237,7 @@ async function buildMessagePlan(
         )
       : buildParticipantStateAssignments(
           messageId,
-          selected.content,
+          parsingContent,
           participantProfiles,
           chatPreferences,
           chatPreferences.primaryContactZone,

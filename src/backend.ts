@@ -2182,6 +2182,10 @@ function createBaselineParticipantState(messageId: string): ParticipantState {
 
 function detectActionType(content: string): ActionType {
   const normalized = content.toLowerCase()
+  const hasFingerPenetrationCue =
+    /\b(finger|fingers|fingering|knuckle|digits?)\b[^.!?]{0,24}\b(inside|enter|curl|scissor|pump|pressing against that spot|that spot inside|working inside|between her legs|between his legs|between their legs)\b|\b(inside|enter|curl|scissor|pump|pressing against that spot|that spot inside|working inside|between her legs|between his legs|between their legs)\b[^.!?]{0,24}\b(finger|fingers|fingering|knuckle|digits?)\b/i.test(
+      normalized,
+    )
   const hasRideCue =
     /\b(ride|rides|riding|rode|straddle|straddles|straddling|bounce|bounces|bouncing|buck|bucks|bucking|rock|rocks|rocking|twerk|twerks|twerking|twerked)\b/i.test(
       normalized,
@@ -2204,12 +2208,7 @@ function detectActionType(content: string): ActionType {
     return 'thrust'
   }
   if (normalized.includes('suction') || normalized.includes('suck')) return 'suction'
-  if (
-    /\b(finger|fingers|fingering|knuckle|digits?)\b/i.test(normalized) &&
-    /\b(inside|enter|curl|scissor|pump|pressing against that spot|that spot inside|working inside|between her legs|between his legs|between their legs)\b/i.test(
-      normalized,
-    )
-  ) {
+  if (hasFingerPenetrationCue) {
     return 'finger'
   }
   if (hasRideCue && !hasGrindCue) return 'ride'
@@ -2640,16 +2639,16 @@ function hasTrackedGenitalReference(text: string, userReferences: string[]): boo
 
   const explicitTrackedGenitalPattern =
     /\b(your\s+(cock|dick|penis|shaft)|cock|dick|penis|shaft)\b/i
-  const impliedTrackedGenitalPattern =
-    /\b(head|tip|length)\b/i
+  const contextualTrackedGenitalPattern =
+    /\b(head|tip|length|underside|ridge|crown)\b[^.!?]{0,18}\b(shaft|cock|dick|penis|base|mouth|lips|tongue|throat|take|takes|taking|wrap|wraps|wrapping|lick|licks|licking|suck|sucks|sucking|swallow|swallows|swallowing)\b|\b(shaft|cock|dick|penis|base|mouth|lips|tongue|throat|take|takes|taking|wrap|wraps|wrapping|lick|licks|licking|suck|sucks|sucking|swallow|swallows|swallowing)\b[^.!?]{0,18}\b(head|tip|length|underside|ridge|crown)\b/i
 
   if (
     explicitTrackedGenitalPattern.test(normalized) ||
-    (actorReferencePattern.test(normalized) && impliedTrackedGenitalPattern.test(normalized)) ||
+    (actorReferencePattern.test(normalized) && contextualTrackedGenitalPattern.test(normalized)) ||
     userReferences.some((reference) => {
       const escapedReference = escapeRegExp(reference.toLowerCase())
       return new RegExp(
-        `\\b${escapedReference}(?:'s)?\\b[^.!?]{0,18}\\b(cock|dick|penis|shaft|head|tip|length)\\b`,
+        `\\b${escapedReference}(?:'s)?\\b[^.!?]{0,18}\\b(cock|dick|penis|shaft)\\b`,
         'i',
       ).test(normalized)
     })
@@ -2658,7 +2657,10 @@ function hasTrackedGenitalReference(text: string, userReferences: string[]): boo
   }
 
   const objectLikeReferences = userReferences.filter(
-    (reference) => !/^(his|your|yours|yourself|he)$/i.test(reference.trim()),
+    (reference) =>
+      !/^(you|your|yours|yourself|he|him|his|she|her|hers|they|them|their|theirs|me|my|mine)$/i.test(
+        reference.trim(),
+      ),
   )
 
   if (objectLikeReferences.length === 0) {
@@ -2833,22 +2835,22 @@ function containsActorGenitalPenetration(
 
   const explicitTrackedGenitalPattern =
     /\b(your\s+(cock|dick|penis|shaft)|cock|dick|penis|shaft)\b/i
-  const impliedTrackedGenitalPattern =
-    /\b(head|tip|length)\b/i
+  const contextualTrackedGenitalPattern =
+    /\b(head|tip|length|underside|ridge|crown)\b[^.!?]{0,18}\b(shaft|cock|dick|penis|base|mouth|lips|tongue|throat|take|takes|taking|wrap|wraps|wrapping|lick|licks|licking|suck|sucks|sucking|swallow|swallows|swallowing)\b|\b(shaft|cock|dick|penis|base|mouth|lips|tongue|throat|take|takes|taking|wrap|wraps|wrapping|lick|licks|licking|suck|sucks|sucking|swallow|swallows|swallowing)\b[^.!?]{0,18}\b(head|tip|length|underside|ridge|crown)\b/i
   const hasTrackedGenitalAnchor =
     explicitTrackedGenitalPattern.test(normalized) ||
-    impliedTrackedGenitalPattern.test(normalized) ||
+    contextualTrackedGenitalPattern.test(normalized) ||
     userReferences.some((reference) => {
       const escapedReference = escapeRegExp(reference.toLowerCase())
       return new RegExp(
-        `\\b${escapedReference}(?:'s)?\\b[^.!?]{0,18}\\b(cock|dick|penis|shaft|head|tip|length)\\b`,
+        `\\b${escapedReference}(?:'s)?\\b[^.!?]{0,18}\\b(cock|dick|penis|shaft)\\b`,
         'i',
       ).test(normalized)
     })
 
   return (
     (hasTrackedGenitalAnchor &&
-      /\b(press(?:es|ing)?|push(?:es|ing)?|slide(?:s|ing)?|thrust(?:s|ing)?|sink(?:s|ing)?|bury|buries|enter(?:s|ing)?|penetrat(?:e|es|ing)|fuck(?:s|ing)?)\b[^.!?]{0,36}\b(into|inside|in)\b[^.!?]{0,24}\b(her|him|them|body|hole|pussy|cunt|ass|anus|mouth|throat)\b/i.test(
+      /\b(press(?:es|ing)?|push(?:es|ing)?|slide(?:s|ing)?|thrust(?:s|ing)?|sink(?:s|ing)?|bury|buries|enter(?:s|ing)?|penetrat(?:e|es|ing)|fuck(?:s|ing)?)\b[^.!?]{0,36}\b(into|inside|in)\b[^.!?]{0,24}\b(her|him|them|body|hole|pussy|cunt|ass|anus)\b/i.test(
         normalized,
       )) ||
     /\b(your\s+(cock|dick|penis|shaft)|cock|dick|penis|shaft)\b[^.!?]{0,50}\b(parts?|push(?:es|ing)?|press(?:es|ing)?|slides?|sliding|sinks?|sinking|buries?|enter(?:s|ing)?|disappears?|fill(?:s|ing)?|seat(?:s|ed|ing)?)\b/i.test(
@@ -2886,6 +2888,14 @@ function containsPenetrationIntoOwnedZone(
       : zone === 'mouth'
         ? 'mouth|lips|tongue|throat'
         : 'heat|entrance|folds|walls|rim|depths?|hole|body|inside|slick\\s+heat|wet\\s+heat'
+  const receptiveTargetTerms =
+    zone === 'genitals'
+      ? 'her|him|them|body|hole|pussy|cunt|vagina|heat|entrance|folds|walls|depths?|labia'
+      : zone === 'anus'
+        ? 'her|him|them|body|hole|ass|anus|asshole|backdoor|rear|rim|entrance|walls|depths?'
+        : zone === 'mouth'
+          ? 'her|him|them|mouth|lips|tongue|throat'
+          : 'her|him|them|body|hole|mouth|throat|heat|entrance|folds|walls|rim|depths?'
   const penetrationPattern =
     /\b(press(?:es|ing)?|push(?:es|ing)?|slide(?:s|ing)?|thrust(?:s|ing)?|sink(?:s|ing)?|bury|buries|enter(?:s|ing)?|penetrat(?:e|es|ing)|fuck(?:s|ing)?|fill(?:s|ing)?|stretch(?:es|ing)?)\b/i
 
@@ -2941,7 +2951,14 @@ function containsPenetrationIntoOwnedZone(
       return new RegExp(`\\b${escaped}\\b`, 'i').test(localWindow)
     })
 
-    if (hasPossessiveReference && penetrationPattern.test(localWindow)) {
+    if (
+      hasPossessiveReference &&
+      penetrationPattern.test(localWindow) &&
+      new RegExp(
+        `\\b(into|inside|in|past|through|between|around)\\b[^.!?]{0,20}\\b(${receptiveTargetTerms})\\b`,
+        'i',
+      ).test(localWindow)
+    ) {
       return true
     }
   }
@@ -3779,6 +3796,8 @@ function hasExecutedTrackedContactEvidence(
       continue
     }
 
+    const hasTrackedGenitalCue =
+      zone === 'genitals' ? hasTrackedGenitalReference(segment, userReferences) : false
     const hasDirectZoneContact = clauseHasDirectTrackedZoneContact(
       segment,
       zone,
@@ -3801,6 +3820,15 @@ function hasExecutedTrackedContactEvidence(
       /\b(sinks?|sinking|lowers?|lowering|settles?|settling|slides?|sliding|roll(?:s|ing)?\s+her\s+hips|ride(?:s|ing)?|bounce(?:s|ing)?|rock(?:s|ing)?|twerk(?:s|ing)?|grind(?:s|ing)?|buried|inside|flush against|to the hilt)\b/i.test(
         segment,
       )
+
+    if (
+      zone === 'genitals' &&
+      !hasTrackedGenitalCue &&
+      !hasPenetration &&
+      !hasMountedRideExecution
+    ) {
+      continue
+    }
 
     if (
       (hasDirectZoneContact || hasPenetration || hasMountedRideExecution) &&

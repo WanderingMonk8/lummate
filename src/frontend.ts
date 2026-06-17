@@ -625,7 +625,7 @@ export function setup(ctx: SpindleFrontendContext) {
     return `${label}: ${entries
       .map(
         (entry) =>
-          `${entry.displayName} ${formatParticipantStateSummary(entry.state)} (${entry.state.provenance}, w${entry.weight}, src:${entry.state.sourceMessageId ?? 'none'})`,
+          `${entry.displayName} ${formatParticipantStateSummary(entry.state)} (${entry.state.provenance}, w${entry.weight}, msg:${entry.state.sourceMessageId ?? 'none'})`,
       )
       .join(' | ')}`
   }

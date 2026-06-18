@@ -3881,6 +3881,18 @@ function findContactLinkedCharacterProfiles(
     return characterProfiles
   }
 
+  const sourceCardIds = [
+    ...new Set(
+      characterProfiles
+        .map((profile) => profile.sourceCardId?.trim() ?? '')
+        .filter((sourceCardId) => sourceCardId.length > 0),
+    ),
+  ]
+
+  if (sourceCardIds.length === 1) {
+    return characterProfiles
+  }
+
   return characterProfiles.slice(0, 1)
 }
 
@@ -4026,6 +4038,92 @@ function inferTrackedDominantSideFromActionMemory(
   return null
 }
 
+function inferProfileDominantSideFromActionMemory(
+  content: string,
+  profile: ParticipantProfile,
+  participantProfiles: ParticipantProfileBundle,
+  chatPreferences: ChatTrackingPreferences,
+  zone: UserContactZone,
+  customZone: string,
+): 'actor' | 'actee' | null {
+  const trackedReferences = buildTrackedReferenceHints(participantProfiles, chatPreferences)
+  const possessiveReferences = buildTrackedPossessiveReferenceHints(participantProfiles, chatPreferences)
+  const clauses = splitZoneRelevantClauses(
+    content,
+    zone,
+    customZone,
+    trackedReferences,
+    possessiveReferences,
+  )
+
+  if (clauses.length === 0) {
+    return null
+  }
+
+  const profileHints = buildProfileNameHints(profile)
+  const counterpartyHints = [
+    ...(participantProfiles.userProfile &&
+    participantProfiles.userProfile.participantId !== profile.participantId
+      ? buildProfileNameHints(participantProfiles.userProfile)
+      : []),
+    ...participantProfiles.characterProfiles
+      .filter((candidate) => candidate.participantId !== profile.participantId)
+      .flatMap((candidate) => buildProfileNameHints(candidate)),
+  ]
+
+  const actionMemory = new Map<ActionType, 'actor' | 'actee'>()
+  let actorScore = 0
+  let acteeScore = 0
+
+  for (const entry of clauses) {
+    const actionTypes = inferActionTypesFromClause(
+      entry.clause,
+      entry.sentence,
+      zone,
+      customZone,
+      trackedReferences,
+      possessiveReferences,
+    )
+
+    for (const actionType of actionTypes) {
+      const explicitSide = hasNamedActionAgency(entry.clause, profileHints, actionType)
+        ? 'actor'
+        : hasNamedActionAgency(entry.clause, counterpartyHints, actionType)
+          ? 'actee'
+          : null
+      const resolvedSide = explicitSide ?? actionMemory.get(actionType) ?? null
+
+      if (explicitSide) {
+        actionMemory.set(actionType, explicitSide)
+      }
+
+      if (resolvedSide === 'actor') {
+        actorScore += 1
+      } else if (resolvedSide === 'actee') {
+        acteeScore += 1
+      }
+    }
+  }
+
+  if (actorScore > acteeScore) return 'actor'
+  if (acteeScore > actorScore) return 'actee'
+
+  if (profile.participantKind === 'persona') {
+    return inferUserLikelySide(content)
+  }
+
+  return inferTrackedParticipantLikelySideByHeuristic(content, profileHints)
+}
+
+function resolveParticipantStateForProfile(
+  messageId: string,
+  content: string,
+  profile: ParticipantProfile,
+  side: 'actor' | 'actee',
+): ParticipantState {
+  return detectParticipantState(content, messageId, side, buildProfileNameHints(profile))
+}
+
 function buildParticipantStateAssignments(
   messageId: string,
   content: string,
@@ -4057,18 +4155,6 @@ function buildParticipantStateAssignments(
       primaryUserContactZone,
       customUserContactZone,
     ) ?? inferTrackedParticipantLikelySide(content, trackedReferences)
-  const actorTemplate = detectParticipantState(
-    content,
-    messageId,
-    'actor',
-    trackedSide === 'actor' ? trackedReferences : undefined,
-  )
-  const acteeTemplate = detectParticipantState(
-    content,
-    messageId,
-    'actee',
-    trackedSide === 'actee' ? trackedReferences : undefined,
-  )
   const assignments: ParticipantStateAssignment[] = []
   const includeUserCounterparty =
     trackedProfile?.participantKind === 'character' &&
@@ -4163,12 +4249,18 @@ function buildParticipantStateAssignments(
   const pushAssignments = (
     side: 'actor' | 'actee',
     participants: typeof actorParticipants,
-    template: ParticipantState,
   ) => {
     if (participants.length === 0) return
     const weight = Number((1 / participants.length).toFixed(4))
 
     for (const participant of participants) {
+      const matchedProfile =
+        participant.participantId != null
+          ? [
+              participantProfiles.userProfile,
+              ...participantProfiles.characterProfiles,
+            ].find((profile) => profile?.participantId === participant.participantId) ?? null
+          : null
       assignments.push({
         participantId: participant.participantId,
         participantKind: participant.participantKind,
@@ -4176,14 +4268,74 @@ function buildParticipantStateAssignments(
         side,
         weight,
         isUserPersona: participant.isUserPersona,
-        state: { ...template },
+        state:
+          matchedProfile != null
+            ? resolveParticipantStateForProfile(messageId, content, matchedProfile, side)
+            : detectParticipantState(content, messageId, side),
       })
     }
   }
 
-  pushAssignments('actor', actorParticipants, actorTemplate)
-  pushAssignments('actee', acteeParticipants, acteeTemplate)
+  pushAssignments('actor', actorParticipants)
+  pushAssignments('actee', acteeParticipants)
   return assignments
+}
+
+function buildParticipantRosterStateAssignments(
+  messageId: string,
+  content: string,
+  participantProfiles: ParticipantProfileBundle,
+  chatPreferences: ChatTrackingPreferences,
+  primaryUserContactZone: UserContactZone,
+  customUserContactZone: string,
+  activeAssignments: ParticipantStateAssignment[],
+): ParticipantStateAssignment[] {
+  const trackedReferences = buildTrackedReferenceHints(participantProfiles, chatPreferences)
+  const possessiveReferences = buildTrackedPossessiveReferenceHints(participantProfiles, chatPreferences)
+  if (
+    !includesUserPrimaryContactZone(
+      content,
+      primaryUserContactZone,
+      customUserContactZone,
+      possessiveReferences,
+      trackedReferences,
+    )
+  ) {
+    return []
+  }
+
+  const roster: ParticipantProfile[] = [
+    ...(participantProfiles.userProfile ? [participantProfiles.userProfile] : []),
+    ...participantProfiles.characterProfiles,
+  ]
+
+  return roster.map((profile) => {
+    const activeAssignment =
+      activeAssignments.find((assignment) => assignment.participantId === profile.participantId) ?? null
+    const side =
+      activeAssignment?.side ??
+      inferProfileDominantSideFromActionMemory(
+        content,
+        profile,
+        participantProfiles,
+        chatPreferences,
+        primaryUserContactZone,
+        customUserContactZone,
+      ) ??
+      (profile.participantKind === 'persona' ? 'actee' : 'actor')
+
+    return {
+      participantId: profile.participantId,
+      participantKind: profile.participantKind,
+      displayName: profile.displayName,
+      side,
+      weight: activeAssignment?.weight ?? 0,
+      isUserPersona: profile.participantKind === 'persona',
+      state:
+        activeAssignment?.state ??
+        resolveParticipantStateForProfile(messageId, content, profile, side),
+    }
+  })
 }
 
 function resolveContinuityVerdict(
@@ -4615,6 +4767,7 @@ async function buildMessagePlan(
       playbackMode: playbackModeOverride ?? preset.repeatStyle,
       parserSource: 'llm',
       participantStates: [],
+      participantRosterStates: [],
       semanticBeats: [],
       resolvedBeats: [],
       continuityVerdict: parsedScene.continuity_verdict,
@@ -4630,6 +4783,7 @@ async function buildMessagePlan(
       playbackMode: playbackModeOverride ?? preset.repeatStyle,
       parserSource: 'heuristic_fallback',
       participantStates: [],
+      participantRosterStates: [],
       semanticBeats: [],
       resolvedBeats: [],
       continuityVerdict: null,
@@ -4771,6 +4925,15 @@ async function buildMessagePlan(
           chatPreferences.primaryContactZone,
           chatPreferences.customContactZone,
         )
+  const participantRosterStates = buildParticipantRosterStateAssignments(
+    messageId,
+    parsingContent,
+    participantProfiles,
+    chatPreferences,
+    chatPreferences.primaryContactZone,
+    chatPreferences.customContactZone,
+    participantStates,
+  )
 
   const resolvedBeats: ResolvedBeat[] = semanticBeats.map((semanticBeat) => {
     const beatPreset =
@@ -4844,6 +5007,7 @@ async function buildMessagePlan(
       playbackMode: playbackModeOverride ?? preset.repeatStyle,
       parserSource,
       participantStates,
+      participantRosterStates,
       semanticBeats,
       resolvedBeats,
       continuityVerdict,

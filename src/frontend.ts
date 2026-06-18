@@ -513,6 +513,7 @@ export function setup(ctx: SpindleFrontendContext) {
       <div class="lummate-phase6-debug-settings-zone">Settings zone: pending</div>
       <div class="lummate-phase6-debug-actor">Actor states: pending</div>
       <div class="lummate-phase6-debug-actee">Actee states: pending</div>
+      <div class="lummate-phase6-debug-roster">Roster states: pending</div>
       <div class="lummate-phase4-debug-title">Phase 7 Parsed Actions</div>
       <div class="lummate-phase7-debug-source">Parser source: pending</div>
       <div class="lummate-phase7-debug-continuity">Continuity: pending</div>
@@ -626,6 +627,20 @@ export function setup(ctx: SpindleFrontendContext) {
       .map(
         (entry) =>
           `${entry.displayName} ${formatParticipantStateSummary(entry.state)} (${entry.state.provenance}, w${entry.weight}, msg:${entry.state.sourceMessageId ?? 'none'})`,
+      )
+      .join(' | ')}`
+  }
+
+  function formatParticipantRosterStateAssignments(label: string, plan: MessagePlan | null) {
+    if (!plan) return `${label}: pending`
+
+    const entries = plan.participantRosterStates
+    if (entries.length === 0) return `${label}: none`
+
+    return `${label}: ${entries
+      .map(
+        (entry) =>
+          `${entry.displayName} [${entry.side}] ${formatParticipantStateSummary(entry.state)} (${entry.state.provenance}, w${entry.weight}, msg:${entry.state.sourceMessageId ?? 'none'})`,
       )
       .join(' | ')}`
   }
@@ -866,6 +881,7 @@ export function setup(ctx: SpindleFrontendContext) {
     const settingsZoneNode = debugIndicator.querySelector('.lummate-phase6-debug-settings-zone')
     const actorStateNode = debugIndicator.querySelector('.lummate-phase6-debug-actor')
     const acteeStateNode = debugIndicator.querySelector('.lummate-phase6-debug-actee')
+    const rosterStateNode = debugIndicator.querySelector('.lummate-phase6-debug-roster')
     const continuityNode = debugIndicator.querySelector('.lummate-phase7-debug-continuity')
     const heldNode = debugIndicator.querySelector('.lummate-phase7-debug-held')
     const schedulerNode = debugIndicator.querySelector('.lummate-phase7-debug-scheduler')
@@ -943,6 +959,12 @@ export function setup(ctx: SpindleFrontendContext) {
           'Actee states',
           currentPlan,
           'actee',
+        )
+      }
+      if (rosterStateNode) {
+        rosterStateNode.textContent = formatParticipantRosterStateAssignments(
+          'Roster states',
+          currentPlan,
         )
       }
     }

@@ -191,6 +191,7 @@ export interface MessagePlan {
   playbackMode: PlaybackMode
   parserSource: 'llm' | 'deterministic_zone_fallback' | 'heuristic_fallback'
   participantStates: ParticipantStateAssignment[]
+  participantRosterStates: ParticipantStateAssignment[]
   semanticBeats: SemanticBeat[]
   resolvedBeats: ResolvedBeat[]
   continuityVerdict: ContinuityVerdict | null

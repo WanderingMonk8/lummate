@@ -2561,7 +2561,7 @@ function getUserZoneTerms(zone: UserContactZone, customZone: string): RegExp {
       return buildCustomZonePattern(customZone)
     case 'genitals':
     default:
-      return /\b(cock|dick|clit|clitoris|pussy|cunt|vagina|penis|shaft|tip|length|underside|ridge|labia|folds)\b/
+      return /\b(cock|dick|clit|clitoris|pussy|cunt|vagina|penis|shaft|tip|length|underside|ridge|labia|folds|sac|balls|scrotum|crown|head|base)\b/
   }
 }
 
@@ -2638,9 +2638,9 @@ function hasTrackedGenitalReference(text: string, userReferences: string[]): boo
       : /\b(you|your|yours|yourself)\b/i
 
   const explicitTrackedGenitalPattern =
-    /\b(your\s+(cock|dick|penis|shaft)|cock|dick|penis|shaft)\b/i
+    /\b(your\s+(cock|dick|penis|shaft|sac|balls|scrotum)|cock|dick|penis|shaft|sac|balls|scrotum)\b/i
   const contextualTrackedGenitalPattern =
-    /\b(head|tip|length|underside|ridge|crown)\b[^.!?]{0,18}\b(shaft|cock|dick|penis|base|mouth|lips|tongue|throat|take|takes|taking|wrap|wraps|wrapping|lick|licks|licking|suck|sucks|sucking|swallow|swallows|swallowing)\b|\b(shaft|cock|dick|penis|base|mouth|lips|tongue|throat|take|takes|taking|wrap|wraps|wrapping|lick|licks|licking|suck|sucks|sucking|swallow|swallows|swallowing)\b[^.!?]{0,18}\b(head|tip|length|underside|ridge|crown)\b/i
+    /\b(head|tip|length|underside|ridge|crown|sac|balls|scrotum|base)\b[^.!?]{0,24}\b(shaft|cock|dick|penis|base|mouth|lips|tongue|throat|take|takes|taking|wrap|wraps|wrapping|lick|licks|licking|lap|lapping|suck|sucks|sucking|swallow|swallows|swallowing|kiss|kisses|kissing|work|works|working|press|pressing)\b|\b(shaft|cock|dick|penis|base|mouth|lips|tongue|throat|take|takes|taking|wrap|wraps|wrapping|lick|licks|licking|lap|lapping|suck|sucks|sucking|swallow|swallows|swallowing|kiss|kisses|kissing|work|works|working|press|pressing)\b[^.!?]{0,24}\b(head|tip|length|underside|ridge|crown|sac|balls|scrotum|base)\b/i
 
   if (
     explicitTrackedGenitalPattern.test(normalized) ||
@@ -2648,7 +2648,7 @@ function hasTrackedGenitalReference(text: string, userReferences: string[]): boo
     userReferences.some((reference) => {
       const escapedReference = escapeRegExp(reference.toLowerCase())
       return new RegExp(
-        `\\b${escapedReference}(?:'s)?\\b[^.!?]{0,18}\\b(cock|dick|penis|shaft)\\b`,
+        `\\b${escapedReference}(?:'s)?\\b[^.!?]{0,24}\\b(cock|dick|penis|shaft|sac|balls|scrotum|head|tip|crown|base)\\b`,
         'i',
       ).test(normalized)
     })
@@ -2681,7 +2681,7 @@ function hasTrackedGenitalReference(text: string, userReferences: string[]): boo
       'i',
     ).test(normalized) ||
     new RegExp(
-      `\\b(work(?:s|ing)?|swallow(?:s|ing)?|taste(?:s|ing)?|moan(?:s|ing)?\\s+around|take(?:s|ing)?)\\b[^.!?]{0,20}\\b(${objectReferencePattern})\\b`,
+      `\\b(work(?:s|ing)?|swallow(?:s|ing)?|taste(?:s|ing)?|moan(?:s|ing)?\\s+around|take(?:s|ing)?|lap(?:s|ping)?|kiss(?:es|ing)?|press(?:es|ing)?)\\b[^.!?]{0,28}\\b(${objectReferencePattern})\\b`,
       'i',
     ).test(normalized)
   )
@@ -2769,7 +2769,7 @@ function hasExplicitNonGenitalPenetratorObject(text: string): boolean {
 }
 
 function hasPresentPhysicalExecutionCue(text: string): boolean {
-  return /\b(sinks?|sinking|lower(?:s|ing)?|settl(?:e|es|ing)|slides?|sliding|thrust(?:s|ing)?|bottom(?:ing)? out|buried|flush against|parting around|clenching around|roll(?:s|ing)? her hips|grind(?:s|ing)?|lick(?:s|ing)?|suck(?:s|ing)?|tongue makes first contact|takes?\s+(?:him|it)\s+deep|mouth finds you again|seated inside|to the hilt)\b/i.test(
+  return /\b(sinks?|sinking|lower(?:s|ing)?|settl(?:e|es|ing)|slides?|sliding|thrust(?:s|ing)?|bottom(?:ing)? out|buried|flush against|parting around|clenching around|roll(?:s|ing)? her hips|grind(?:s|ing)?|lick(?:s|ing)?|suck(?:s|ing)?|lap(?:s|ping)?|kiss(?:es|ing)?|press(?:es|ing)?|trace(?:s|ing)?|work(?:s|ing)?\s+(?:around|along|over)|mouth(?:s)?\s+working|tongue makes first contact|takes?\s+(?:him|it|you)\s+deep(?:er)?|throat\s+working\s+around|mouth finds you again|seated inside|to the hilt)\b/i.test(
     text,
   )
 }
@@ -3222,6 +3222,13 @@ function splitZoneRelevantClauses(
   for (const sentence of sentences) {
     const sentenceLower = sentence.toLowerCase()
     const sentenceHasTrackedGenitalCue = hasTrackedGenitalReference(sentence, userReferences)
+    const sentenceHasDirectZoneContact = clauseHasDirectTrackedZoneContact(
+      sentence,
+      zone,
+      customZone,
+      userReferences,
+      possessiveReferences,
+    )
     const sentenceRelevant =
       (containsAnyReference(sentence, userReferences) &&
         ((zoneTerms.test(sentenceLower) &&
@@ -3269,6 +3276,7 @@ function splitZoneRelevantClauses(
       const clauseHasGenitalCue = /\b(cock|dick|penis|shaft|head|tip|length|clit|clitoris|pussy|cunt|vagina|entrance|underside|ridge)\b/i.test(
         clause,
       )
+      const clauseHasExecutionCue = hasPresentPhysicalExecutionCue(clause)
       const clauseHasTrackedGenitalCue = hasTrackedGenitalReference(clause, userReferences)
       const clauseHasForeignOwnedZone = hasExplicitMismatchingOwnedZonePronoun(
         clause,
@@ -3309,6 +3317,12 @@ function splitZoneRelevantClauses(
           possessiveReferences,
           userReferences,
         ) ||
+        (sentenceHasDirectZoneContact &&
+          clauseHasExecutionCue &&
+          (clauseHasOralCue || clauseHasGenitalCue)) ||
+        (sentenceHasTrackedGenitalCue &&
+          clauseHasExecutionCue &&
+          (clauseHasOralCue || clauseHasGenitalCue)) ||
         (zone === 'genitals' && clauseHasTrackedGenitalCue)
 
       if (clauseRelevant) {

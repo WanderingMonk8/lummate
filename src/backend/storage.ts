@@ -41,8 +41,7 @@ function buildDefaultActionCalibrationPresets(): ActionCalibrationPreset[] {
     fallbackTarget: null,
     baseAmplitude: 50,
     baseTempo: 50,
-    preferredExecutionProfile:
-      semanticActionType === 'thrust' ? 'pattern_funscript' : CALIBRATION_EXECUTION_PROFILES[0],
+    preferredExecutionProfile: CALIBRATION_EXECUTION_PROFILES[0],
     preferredTransitionStyle: semanticActionType === 'pulse' ? 'abrupt' : 'smooth',
     repeatStyle:
       semanticActionType === 'pulse' ? 'once' : semanticActionType === 'tease' ? 'loop' : 'hold',
@@ -87,6 +86,13 @@ function mergeSettings(settings: UserSettings): UserSettings {
 
   if (merged.xtoysDelivery.triggerFieldName === 'sendTrigger') {
     merged.xtoysDelivery.triggerFieldName = 'action'
+  }
+
+  const thrustPreset = merged.actionCalibrationPresets.find(
+    (preset) => preset.semanticActionType === 'thrust',
+  )
+  if (thrustPreset) {
+    thrustPreset.preferredExecutionProfile = CALIBRATION_EXECUTION_PROFILES[0]
   }
 
   return merged

@@ -377,6 +377,16 @@ async function finalizePlayback(
         message_id: runtime.plan.messageId,
       }),
     )
+  } else if (reason === 'completed' && runtime.plan.endResolution === 'idle') {
+    dispatchActionName = settings.xtoysDelivery.stopActionName
+    dispatchResult = await postXtowsBeatPayloads(
+      userId,
+      settings,
+      buildXtowsStopPayloads(settings, activeActionName, 'stop', {
+        reason,
+        message_id: runtime.plan.messageId,
+      }),
+    )
   } else if (reason === 'panic_stop') {
     dispatchActionName = settings.xtoysDelivery.panicStopActionName
     dispatchResult = await postXtowsBeatPayloads(
@@ -922,7 +932,11 @@ function parseExplicitCountHint(text: string): number | null {
     return null
   }
 
-  const digitMatch = text.match(/\b(\d{1,3})\b/)
+  const countContextPattern =
+    /\b(strokes?|thrusts?|licks?|kisses?|pumps?|pushes?|circles?|grinds?|rolls?|bounces?|passes?|times?|beats?)\b/i
+  const digitMatch = text.match(
+    /\b(\d{1,3})\b(?=[^.!?]{0,24}\b(strokes?|thrusts?|licks?|kisses?|pumps?|pushes?|circles?|grinds?|rolls?|bounces?|passes?|times?|beats?)\b)/i,
+  )
   if (digitMatch) {
     const parsed = Number(digitMatch[1])
     return Number.isFinite(parsed) && parsed > 0 ? parsed : null
@@ -955,9 +969,21 @@ function parseExplicitCountHint(text: string): number | null {
   }
 
   for (const [word, value] of Object.entries(numberWords)) {
-    if (new RegExp(`\\b${word}\\b`, 'i').test(text)) {
+    if (
+      new RegExp(
+        `\\b${word}\\b(?=[^.!?]{0,24}\\b(strokes?|thrusts?|licks?|kisses?|pumps?|pushes?|circles?|grinds?|rolls?|bounces?|passes?|times?|beats?)\\b)`,
+        'i',
+      ).test(text)
+    ) {
       return value
     }
+  }
+
+  if (
+    /\b(a few|a couple|several)\b/i.test(text) &&
+    countContextPattern.test(text)
+  ) {
+    return /\b(a few|several)\b/i.test(text) ? 3 : 2
   }
 
   return null
@@ -1068,7 +1094,7 @@ function hasExplicitPauseCue(text: string): boolean {
 }
 
 function hasDiscreteActCue(text: string): boolean {
-  return /\b(once|single|briefly|just long enough|quick(?:ly)?|one quick|one deep|one firm|one slow)\b/i.test(
+  return /\b(once|briefly|just long enough|quick(?:ly)?|one quick|one deep|one firm|one slow|single\s+(?:stroke|thrust|lick|kiss|motion|pump|push)|one\s+(?:stroke|thrust|lick|kiss|pump|push|motion))\b/i.test(
     text,
   )
 }
@@ -1199,6 +1225,116 @@ function inferDeterministicDurationProfile(
     countHint: 'continuous',
     persistence: 'ongoing',
     fallbackBehavior: 'hold_last',
+  }
+}
+
+function buildGenericHeuristicFallbackBeat(
+  content: string,
+  messageId: string,
+  actionType: ActionType,
+  preset: ActionCalibrationPreset,
+  playbackModeOverride: PlaybackMode | null,
+  zone: UserContactZone,
+  customZone: string,
+  userReferences: string[],
+  possessiveReferences: string[],
+): SemanticBeat | null {
+  const clauses = splitZoneRelevantClauses(
+    content,
+    zone,
+    customZone,
+    userReferences,
+    possessiveReferences,
+  )
+
+  if (clauses.length === 0) {
+    return null
+  }
+
+  const rankedCandidates = clauses
+    .map((entry, index) => {
+      const inferredActionTypes = inferActionTypesFromClause(
+        entry.clause,
+        entry.sentence,
+        zone,
+        customZone,
+        userReferences,
+        possessiveReferences,
+      )
+      const rankedHints = rankZoneScopedActionHints(
+        entry.clause,
+        zone,
+        customZone,
+        userReferences,
+        possessiveReferences,
+      )
+      const matchingHintScore = rankedHints.find((hint) => hint.actionType === actionType)?.score ?? 0
+      const clauseHasDirectZoneContact = clauseHasDirectTrackedZoneContact(
+        entry.clause,
+        zone,
+        customZone,
+        userReferences,
+        possessiveReferences,
+      )
+      const clauseHasTrackedGenitalCue = hasTrackedGenitalReference(entry.clause, userReferences)
+      const clauseHasPenetration =
+        containsActorGenitalPenetration(entry.clause, zone, userReferences) ||
+        containsPenetrationIntoOwnedZone(
+          entry.clause,
+          zone,
+          customZone,
+          possessiveReferences,
+          userReferences,
+        )
+      const clauseHasExecutionCue = hasPresentPhysicalExecutionCue(entry.clause)
+      const score =
+        (inferredActionTypes.includes(actionType) ? 100 : 0) +
+        matchingHintScore * 10 +
+        (clauseHasDirectZoneContact ? 8 : 0) +
+        (clauseHasPenetration ? 6 : 0) +
+        (clauseHasTrackedGenitalCue ? 4 : 0) +
+        (clauseHasExecutionCue ? 3 : 0)
+
+      return {
+        index,
+        entry,
+        inferredActionTypes,
+        score,
+      }
+    })
+    .filter((candidate) => candidate.score > 0)
+    .sort((left, right) => right.score - left.score || left.index - right.index)
+
+  const selected = rankedCandidates[0]?.entry ?? clauses[0]
+  const durationProfile = inferDeterministicDurationProfile(actionType, selected.clause)
+  const responseMode = inferDeterministicResponseMode(selected.clause, content)
+  const inferredWeights = inferDeterministicBeatWeights(responseMode)
+  const normalizedClause = selected.clause.toLowerCase()
+
+  return {
+    messageId,
+    orderIndex: 0,
+    sourceExcerpt: selected.clause,
+    actionType,
+    strength: detectStrength(selected.clause, preset),
+    frequency: detectTempo(selected.clause, preset),
+    durationClass: durationProfile.durationClass,
+    durationMs: durationProfile.durationMs,
+    transitionStyle: /\b(slow|deliberate|lowers herself|lowers himself|lowers themself)\b/i.test(
+      normalizedClause,
+    )
+      ? 'ramp'
+      : 'steady',
+    countHint: durationProfile.countHint,
+    persistence: detectPersistence(selected.clause, preset, playbackModeOverride),
+    responseMode,
+    actorWeight: inferredWeights.actorWeight,
+    acteeWeight: inferredWeights.acteeWeight,
+    explicitChange: /\b(becomes|turns|shifts|changes|deepens|quickens|again|while|then)\b/i.test(
+      normalizedClause,
+    ),
+    explicitStop: /\b(stops|withdraws|pulls away|breaks contact|lets go)\b/i.test(normalizedClause),
+    fallbackBehavior: durationProfile.fallbackBehavior,
   }
 }
 
@@ -4824,6 +4960,20 @@ async function buildMessagePlan(
     hasExecutedTrackedContact &&
     (chatPreferences.primaryContactZone === 'genitals' || deterministicZoneBeats.length > 0)
 
+  const genericHeuristicFallbackBeat = allowGenericHeuristicFallback
+    ? buildGenericHeuristicFallbackBeat(
+        parsingContent,
+        messageId,
+        resolvedActionType,
+        resolvedPreset,
+        playbackModeOverride,
+        chatPreferences.primaryContactZone,
+        chatPreferences.customContactZone,
+        trackedReferenceHints,
+        trackedPossessiveReferenceHints,
+      )
+    : null
+
   const rawSemanticBeats: SemanticBeat[] =
     parsedScene?.relevant && sortedLlmBeats.length > 0
       ? sortedLlmBeats.map((beat, index) => {
@@ -4889,28 +5039,8 @@ async function buildMessagePlan(
               fallbackBehavior: normalizeFallbackBehavior(beat.fallback_behavior),
             }
           })
-      : allowGenericHeuristicFallback
-        ? [
-          {
-            messageId,
-            orderIndex: 0,
-            sourceExcerpt: parsingContent,
-            actionType: resolvedActionType,
-            strength: detectStrength(parsingContent, resolvedPreset),
-            frequency: detectTempo(parsingContent, resolvedPreset),
-            durationClass: detectDurationClass(parsingContent, resolvedActionType),
-            durationMs: detectDurationMs(parsingContent, resolvedActionType),
-            transitionStyle: 'unknown',
-            countHint: 'unknown',
-            persistence: detectPersistence(parsingContent, resolvedPreset, playbackModeOverride),
-            responseMode: 'lead',
-            actorWeight: 0.5,
-            acteeWeight: 0.5,
-            explicitChange: /\b(becomes|turns|shifts|changes|deepens|quickens)\b/i.test(parsingContent),
-            explicitStop: /\b(stops|withdraws|pulls away|breaks contact|lets go)\b/i.test(parsingContent),
-            fallbackBehavior: 'unknown',
-          },
-        ]
+      : genericHeuristicFallbackBeat
+        ? [genericHeuristicFallbackBeat]
         : []
 
   const semanticBeats: SemanticBeat[] = [...rawSemanticBeats]
@@ -5133,6 +5263,7 @@ async function handleFrontendMessage(
             current.heldState,
           )
           manualStopDispatchAction = activeActionName ?? settings.xtoysDelivery.stopActionName
+          cancelPlaybackRuntime(userId)
           const stopDispatch = await postXtowsBeatPayloads(
             userId,
             settings,
@@ -5141,7 +5272,6 @@ async function handleFrontendMessage(
               message_id: payload.payload.messageId,
             }),
           )
-          cancelPlaybackRuntime(userId)
           nextHeldState = { ...DEFAULT_SESSION_STATE.heldState }
           currentHeldStateRef = null
           nextScheduler = {

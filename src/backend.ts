@@ -5427,6 +5427,34 @@ async function handleFrontendMessage(
           payload.payload.characterId,
         )
         const currentPlan = current.runtimePlans.currentPlan
+        const settings = await readUserSettings(spindle, userId)
+        const currentChatPreferences = payload.payload.chatId
+          ? await readChatTrackingPreferences(
+              spindle,
+              userId,
+              payload.payload.chatId,
+              settings,
+            )
+          : null
+
+        if (payload.payload.chatId) {
+          await writeChatTrackingPreferences(
+            spindle,
+            userId,
+            payload.payload.chatId,
+            {
+              ...(currentChatPreferences ?? {
+                trackedParticipantId: null,
+                trackedParticipantKind: 'persona',
+                primaryContactZone: settings.parser.primaryUserContactZone,
+                customContactZone: settings.parser.customUserContactZone,
+                playbackMode: payload.payload.playbackMode,
+              }),
+              playbackMode: payload.payload.playbackMode,
+            },
+            settings,
+          )
+        }
 
         let nextHeldState = current.heldState
         let currentHeldStateRef = current.parserSession.currentHeldStateRef
@@ -5437,12 +5465,6 @@ async function handleFrontendMessage(
 
         if (currentPlan && payload.payload.chatId) {
           cancelPlaybackRuntime(userId)
-          const chatPreferences = await readChatTrackingPreferences(
-            spindle,
-            userId,
-            payload.payload.chatId,
-            await readUserSettings(spindle, userId),
-          )
           const controllerResult = applyPhase9Controller(
             {
               ...currentPlan,
@@ -5451,7 +5473,13 @@ async function handleFrontendMessage(
             current.heldState,
             current.runtimePlans.previousPlan,
             payload.payload.chatId,
-            chatPreferences.primaryContactZone,
+            (currentChatPreferences ?? {
+              trackedParticipantId: null,
+              trackedParticipantKind: 'persona',
+              primaryContactZone: settings.parser.primaryUserContactZone,
+              customContactZone: settings.parser.customUserContactZone,
+              playbackMode: payload.payload.playbackMode,
+            }).primaryContactZone,
             new Date().toISOString(),
           )
           nextPlan = controllerResult.plan
@@ -5497,13 +5525,6 @@ async function handleFrontendMessage(
         activeChatIds.set(userId, payload.payload.chatId)
 
         if (payload.payload.chatId && nextPlan && plannedHeldState) {
-          const settings = await readUserSettings(spindle, userId)
-          const chatPreferences = await readChatTrackingPreferences(
-            spindle,
-            userId,
-            payload.payload.chatId,
-            settings,
-          )
           await startPlaybackScheduler(
             userId,
             payload.payload.chatId,
@@ -5511,7 +5532,13 @@ async function handleFrontendMessage(
             nextPlan,
             current.heldState,
             plannedHeldState,
-            chatPreferences.primaryContactZone,
+            (currentChatPreferences ?? {
+              trackedParticipantId: null,
+              trackedParticipantKind: 'persona',
+              primaryContactZone: settings.parser.primaryUserContactZone,
+              customContactZone: settings.parser.customUserContactZone,
+              playbackMode: payload.payload.playbackMode,
+            }).primaryContactZone,
           )
           return
         }
@@ -5525,7 +5552,14 @@ async function handleFrontendMessage(
         }
 
         const settings = await readUserSettings(spindle, userId)
+        const currentChatPreferences = await readChatTrackingPreferences(
+          spindle,
+          userId,
+          payload.payload.chatId,
+          settings,
+        )
         await writeChatTrackingPreferences(spindle, userId, payload.payload.chatId, {
+          ...currentChatPreferences,
           trackedParticipantId: payload.payload.trackedParticipantId,
           trackedParticipantKind: payload.payload.trackedParticipantKind,
           primaryContactZone: settings.parser.primaryUserContactZone,

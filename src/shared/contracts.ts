@@ -116,6 +116,7 @@ export interface ChatTrackingPreferences {
   trackedParticipantKind: ParticipantKind
   primaryContactZone: UserContactZone
   customContactZone: string
+  playbackMode: PlaybackMode
 }
 
 export interface ConnectionProfileSummary {
@@ -408,6 +409,7 @@ export const DEFAULT_CHAT_TRACKING_PREFERENCES: ChatTrackingPreferences = {
   trackedParticipantKind: 'persona',
   primaryContactZone: 'genitals',
   customContactZone: '',
+  playbackMode: 'hold',
 }
 
 export const ALL_ACTION_TYPES: ActionType[] = [

@@ -1054,7 +1054,7 @@ export function setup(ctx: SpindleFrontendContext) {
     const override = playbackModeOverrides.get(messageId)
     if (override) return override
     if (currentPlan?.messageId === messageId) return currentPlan.playbackMode
-    return 'hold'
+    return currentChatPreferences?.playbackMode ?? 'hold'
   }
 
   function syncActiveChat() {
@@ -2278,6 +2278,12 @@ export function setup(ctx: SpindleFrontendContext) {
         const mode = modeButton.dataset.mode
         if (mode === 'once' || mode === 'loop' || mode === 'hold') {
           playbackModeOverrides.set(messageId, mode)
+          if (currentChatPreferences) {
+            currentChatPreferences = {
+              ...currentChatPreferences,
+              playbackMode: mode,
+            }
+          }
           updateBreakoutModeButtons(messageId)
           if (currentPlan?.messageId === messageId) {
             ctx.sendToBackend({
@@ -2310,6 +2316,7 @@ export function setup(ctx: SpindleFrontendContext) {
             settingsPayload?.settings.parser.customUserContactZone ??
             currentChatPreferences?.customContactZone ??
             '',
+          playbackMode: currentChatPreferences?.playbackMode ?? 'hold',
         }
         currentChatPreferences = nextPreferences
         updateBreakoutTrackingButtons(messageId)

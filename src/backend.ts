@@ -195,6 +195,7 @@ function isFrontendMessage(payload: unknown): payload is FrontendToBackendMessag
 
 const runtimeSessions = new Map<string, SessionState>()
 const activeChatIds = new Map<string, string | null>()
+let xtowsDispatchRequestSequence = 0
 type PlaybackCompletionReason = SchedulerState['lastCompletionReason']
 
 interface ActivePlaybackRuntime {
@@ -2080,37 +2081,25 @@ async function postXtowsPayload(
     return { ok: false, error: 'XToys delivery is enabled but no private webhook ID is configured.' }
   }
 
-  if (typeof fetch !== 'function') {
-    return { ok: false, error: 'Fetch is unavailable in the Lumiverse backend runtime.' }
-  }
-
-  const controller = new AbortController()
-  const timeout = setTimeout(
-    () => controller.abort(),
-    Math.max(1000, settings.xtoysDelivery.requestTimeoutMs),
+  const actionName = String(
+    payload[settings.xtoysDelivery.triggerFieldName] ?? payload.action ?? 'unknown',
   )
+  const requestId = `xtoys-${Date.now()}-${++xtowsDispatchRequestSequence}`
 
-  try {
-    const response = await fetch(url, {
-      method: 'GET',
-      signal: controller.signal,
-    })
-
-    if (!response.ok) {
-      return { ok: false, error: `XToys webhook returned ${response.status} ${response.statusText}`.trim() }
-    }
-
-    spindle.log.info(
-      `Lummate dispatched XToys webhook event for user ${userId}: ${String(payload[settings.xtoysDelivery.triggerFieldName] ?? payload.action ?? 'unknown')}`,
-    )
-    return { ok: true }
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-    spindle.log.warn(`Lummate XToys webhook dispatch failed for user ${userId}: ${message}`)
-    return { ok: false, error: message }
-  } finally {
-    clearTimeout(timeout)
-  }
+  sendToUser(
+    {
+      type: 'lummate.xtoys.dispatch',
+      payload: {
+        requestId,
+        url,
+        timeoutMs: Math.max(1000, settings.xtoysDelivery.requestTimeoutMs),
+        actionName,
+      },
+    },
+    userId,
+  )
+  spindle.log.info(`Lummate queued XToys webhook event for user ${userId}: ${actionName}`)
+  return { ok: true }
 }
 
 async function postXtowsBeatPayloads(
@@ -5166,6 +5155,16 @@ async function handleFrontendMessage(
 ): Promise<void> {
   try {
     switch (payload.type) {
+      case 'lummate.xtoys.dispatch_result': {
+        if (payload.payload.ok) {
+          spindle.log.info(`Lummate XToys webhook dispatch completed: ${payload.payload.requestId}`)
+        } else {
+          spindle.log.warn(
+            `Lummate XToys webhook dispatch failed (${payload.payload.requestId}): ${payload.payload.error ?? 'Unknown proxy error'}`,
+          )
+        }
+        return
+      }
       case 'lummate.phase1.bootstrap': {
         const bootstrap = await buildBootstrap(
           userId,

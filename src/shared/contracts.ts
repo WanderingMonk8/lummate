@@ -343,6 +343,19 @@ export interface RegenerateParticipantProfilePayload {
   participantKind: ParticipantKind
 }
 
+export interface XtowsDispatchRequest {
+  requestId: string
+  url: string
+  timeoutMs: number
+  actionName: string
+}
+
+export interface XtowsDispatchResult {
+  requestId: string
+  ok: boolean
+  error?: string
+}
+
 export type FrontendToBackendMessage =
   | { type: 'lummate.phase1.bootstrap'; payload: ChatScopedPayload }
   | { type: 'lummate.phase1.chat_changed'; payload: ChatScopedPayload }
@@ -353,6 +366,7 @@ export type FrontendToBackendMessage =
   | { type: 'lummate.phase5.regenerate_profile'; payload: RegenerateParticipantProfilePayload }
   | { type: 'lummate.settings.bootstrap'; payload: ChatScopedPayload }
   | { type: 'lummate.settings.save'; payload: SettingsSavePayload & { context: ChatScopedPayload } }
+  | { type: 'lummate.xtoys.dispatch_result'; payload: XtowsDispatchResult }
 
 export type BackendToFrontendMessage =
   | { type: 'lummate.phase1.bootstrap_result'; payload: BootstrapPayload }
@@ -360,6 +374,7 @@ export type BackendToFrontendMessage =
   | { type: 'lummate.settings.bootstrap_result'; payload: SettingsBootstrapPayload }
   | { type: 'lummate.settings.save_result'; payload: SettingsBootstrapPayload }
   | { type: 'lummate.phase5.profile_result'; payload: ParticipantProfileBundle }
+  | { type: 'lummate.xtoys.dispatch'; payload: XtowsDispatchRequest }
   | { type: 'lummate.phase1.error'; message: string }
 
 export const DEFAULT_MECHANICAL_AXES: MechanicalAxes = {

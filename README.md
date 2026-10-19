@@ -73,7 +73,7 @@ The parser still mixes LLM output with deterministic fallback logic while the sc
 
 ## Version
 
-Current release: `1.1.3`
+Current release: `1.1.4`
 
 The main working documents are:
 

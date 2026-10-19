@@ -170,67 +170,6 @@ export function setup(ctx: SpindleFrontendContext) {
   const breakoutPanels = new Map<string, HTMLElement>()
   const targets = new Map<string, Element>()
   const settingsComponents: Array<SpindleMountedComponent<unknown>> = []
-  type XtowsDispatchPayload = Extract<
-    BackendToFrontendMessage,
-    { type: 'lummate.xtoys.dispatch' }
-  >['payload']
-  const pendingXtowsDispatches: XtowsDispatchPayload[] = []
-  let xtowsProxyReady = false
-
-  const xtowsProxyFrame = ctx.dom.createSandboxFrame({
-    autoResize: false,
-    initialHeight: 1,
-    minHeight: 1,
-    maxHeight: 1,
-    html: `<!doctype html><html><body><script>
-      spindleSandbox.onMessage(async (message) => {
-        if (!message || message.type !== 'lummate.xtoys.dispatch') return;
-        const payload = message.payload;
-        let timeoutId;
-        try {
-          await Promise.race([
-            spindleSandbox.corsProxy(payload.url, { method: 'GET' }),
-            new Promise((_, reject) => {
-              timeoutId = setTimeout(() => reject(new Error('XToys webhook request timed out')), payload.timeoutMs);
-            }),
-          ]);
-          spindleSandbox.postMessage({ type: 'lummate.xtoys.dispatch_result', payload: { requestId: payload.requestId, ok: true } });
-        } catch (error) {
-          spindleSandbox.postMessage({
-            type: 'lummate.xtoys.dispatch_result',
-            payload: { requestId: payload.requestId, ok: false, error: error instanceof Error ? error.message : String(error) },
-          });
-        } finally {
-          if (timeoutId) clearTimeout(timeoutId);
-        }
-      });
-      spindleSandbox.postMessage({ type: 'lummate.xtoys.proxy_ready' });
-    <\/script></body></html>`,
-  })
-  xtowsProxyFrame.element.style.display = 'none'
-  document.body.appendChild(xtowsProxyFrame.element)
-
-  const detachXtowsProxyMessages = xtowsProxyFrame.onMessage((message) => {
-    if (!message || typeof message !== 'object' || !('type' in message)) return
-    if (message.type === 'lummate.xtoys.proxy_ready') {
-      xtowsProxyReady = true
-      for (const payload of pendingXtowsDispatches.splice(0)) {
-        xtowsProxyFrame.postMessage({ type: 'lummate.xtoys.dispatch', payload })
-      }
-      return
-    }
-    if (message.type === 'lummate.xtoys.dispatch_result' && 'payload' in message) {
-      ctx.sendToBackend({ type: 'lummate.xtoys.dispatch_result', payload: message.payload })
-    }
-  })
-
-  function dispatchXtowsThroughProxy(payload: XtowsDispatchPayload) {
-    if (!xtowsProxyReady) {
-      pendingXtowsDispatches.push(payload)
-      return
-    }
-    xtowsProxyFrame.postMessage({ type: 'lummate.xtoys.dispatch', payload })
-  }
 
   let activeMessageId: string | null = null
   let activeChatId: string | null = ctx.getActiveChat().chatId
@@ -2499,9 +2438,6 @@ export function setup(ctx: SpindleFrontendContext) {
         }
         renderSettingsTab()
         break
-      case 'lummate.xtoys.dispatch':
-        dispatchXtowsThroughProxy(payload.payload)
-        break
     }
   })
 
@@ -2528,8 +2464,6 @@ export function setup(ctx: SpindleFrontendContext) {
   return () => {
     window.clearInterval(scanInterval)
     unsubscribe()
-    detachXtowsProxyMessages()
-    xtowsProxyFrame.destroy()
     detachInputAction()
     detachTabActivate()
     inputAction.destroy()

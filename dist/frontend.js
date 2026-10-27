@@ -35,7 +35,6 @@ const ACTION_ROW_SELECTORS = [
     '[class*="messageActions"]',
     '[class*="actions-row"]',
     '[class*="actionRow"]',
-    '[class*="toolbar"]',
 ];
 function isBackendMessage(payload) {
     return typeof payload === 'object' && payload !== null && 'type' in payload;
@@ -1729,7 +1728,8 @@ export function setup(ctx) {
             if (!isElement(target))
                 continue;
             const resolved = resolveMessageIdFromNode(target);
-            if (resolved && !found.has(resolved) && isLikelyAssistantMessage(target)) {
+            if (resolved && isLikelyAssistantMessage(target)) {
+                // Prefer the precise host action row over the broader message bubble.
                 found.set(resolved, target);
             }
         }
@@ -1756,23 +1756,16 @@ export function setup(ctx) {
         }
         return Array.from(found.entries()).map(([messageId, element]) => ({ messageId, element }));
     }
-    function isActionRowTarget(element) {
-        const hostButtons = Array.from(element.querySelectorAll('button')).filter((button) => !button.closest(CONTROL_SELECTOR));
-        return hostButtons.length >= 2;
-    }
     function findActionRowTarget(bubble) {
         for (const selector of ACTION_ROW_SELECTORS) {
-            if (bubble.matches(selector) && isActionRowTarget(bubble))
+            if (bubble.matches(selector))
                 return bubble;
-            const matches = bubble.querySelectorAll(selector);
-            for (const match of matches) {
-                if (isActionRowTarget(match))
-                    return match;
-            }
+            const match = bubble.querySelector(selector);
+            if (match)
+                return match;
         }
         const classMatches = Array.from(bubble.querySelectorAll('div')).find((element) => typeof element.className === 'string' &&
-            (element.className.includes('_actionsWrap_') || element.className.includes('_actions_wrap_')) &&
-            isActionRowTarget(element));
+            (element.className.includes('_actionsWrap_') || element.className.includes('_actions_wrap_')));
         if (classMatches)
             return classMatches;
         return null;

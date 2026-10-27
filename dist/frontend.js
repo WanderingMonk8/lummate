@@ -217,12 +217,28 @@ export function setup(ctx) {
     .lummate-phase1-mode-button,
     .lummate-phase1-track-button {
       appearance: none;
+      position: static !important;
+      display: inline-flex !important;
+      flex: 0 0 auto !important;
+      align-items: center;
+      justify-content: center;
+      box-sizing: border-box;
       border: 1px solid rgba(148, 163, 184, 0.2);
       background: rgba(15, 23, 42, 0.78);
       color: rgba(226, 232, 240, 0.95);
       border-radius: 10px;
-      padding: 6px 10px;
+      width: auto !important;
+      min-width: max-content;
+      max-width: none !important;
+      height: auto !important;
+      min-height: 30px;
+      margin: 0 !important;
+      padding: 6px 10px !important;
       font-size: 12px;
+      line-height: 1.2;
+      white-space: nowrap;
+      opacity: 1 !important;
+      transform: none !important;
       cursor: pointer;
     }
     .lummate-phase1-mode-button[data-active="true"] {

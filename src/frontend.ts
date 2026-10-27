@@ -2378,15 +2378,9 @@ export function setup(ctx: SpindleFrontendContext) {
 
   function stripNativeMenuActionIdentity(element: Element) {
     for (const attribute of element.getAttributeNames()) {
-      if (
-        attribute === 'class' ||
-        attribute === 'style' ||
-        attribute === 'role' ||
-        attribute === 'tabindex'
-      ) {
-        continue
+      if (attribute === 'id' || attribute.startsWith('data-') || attribute.startsWith('on')) {
+        element.removeAttribute(attribute)
       }
-      element.removeAttribute(attribute)
     }
     for (const child of element.children) {
       stripNativeMenuActionIdentity(child)
@@ -2400,12 +2394,27 @@ export function setup(ctx: SpindleFrontendContext) {
     const generateImageItem = findNativeMenuItem('Generate image')
     if (!generateImageItem?.parentElement) return
 
-    const playItem = generateImageItem.cloneNode(false) as HTMLElement
+    const playItem = generateImageItem.cloneNode(true) as HTMLElement
     stripNativeMenuActionIdentity(playItem)
     playItem.dataset.lummateContextPlay = 'true'
     playItem.setAttribute('aria-label', 'Play actions')
     playItem.setAttribute('title', 'Play actions')
-    playItem.textContent = 'Play actions'
+
+    const label = Array.from(playItem.querySelectorAll<HTMLElement>('*')).find(
+      (element) => element.children.length === 0 && element.textContent?.trim() === 'Generate image',
+    )
+    if (label) {
+      label.textContent = 'Play actions'
+    } else {
+      playItem.textContent = 'Play actions'
+    }
+
+    const icon = playItem.querySelector('svg')
+    if (icon) {
+      icon.setAttribute('viewBox', '0 0 16 16')
+      icon.setAttribute('aria-hidden', 'true')
+      icon.innerHTML = '<path d="M5 3.5v9l7-4.5-7-4.5Z" fill="currentColor"></path>'
+    }
 
     const messageId = pendingContextMenuMessageId
     playItem.addEventListener(

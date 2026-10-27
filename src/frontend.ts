@@ -165,7 +165,6 @@ function isLikelyAssistantMessage(element: Element): boolean {
 export function setup(ctx: SpindleFrontendContext) {
   const injections = new Map<string, Element>()
   const buttons = new Map<string, HTMLButtonElement>()
-  const menuButtons = new Map<string, HTMLButtonElement>()
   const statusLabels = new Map<string, HTMLElement>()
   const breakoutPanels = new Map<string, HTMLElement>()
   const targets = new Map<string, Element>()
@@ -229,37 +228,13 @@ export function setup(ctx: SpindleFrontendContext) {
       height: 14px;
       display: block;
     }
-    .lummate-phase1-menu-button {
-      appearance: none;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      border: 1px solid rgba(148, 163, 184, 0.18);
-      background: transparent;
-      color: rgba(191, 219, 254, 0.9);
-      border-radius: 8px;
-      width: 24px;
-      height: 24px;
-      margin-left: 4px;
-      padding: 0;
-      cursor: pointer;
-    }
-    .lummate-phase1-menu-button:hover {
-      background: rgba(30, 41, 59, 0.42);
-      border-color: rgba(148, 163, 184, 0.35);
-    }
-    .lummate-phase1-menu-button svg {
-      width: 12px;
-      height: 12px;
-      display: block;
-    }
     .lummate-phase1-status {
       display: none;
     }
     .lummate-phase1-breakout {
       position: absolute;
-      top: calc(100% + 8px);
-      right: 0;
+      bottom: calc(100% + 8px);
+      left: 0;
       min-width: 220px;
       display: none;
       flex-direction: column;
@@ -1031,7 +1006,7 @@ export function setup(ctx: SpindleFrontendContext) {
       openBreakout(messageId)
       updateBreakoutModeButtons(messageId)
       hoverOpenTimer = null
-    }, 2000)
+    }, 180)
   }
 
   function scheduleBreakoutClose(messageId: string) {
@@ -2069,28 +2044,30 @@ export function setup(ctx: SpindleFrontendContext) {
     return Array.from(found.entries()).map(([messageId, element]) => ({ messageId, element }))
   }
 
-  function findActionRowTarget(bubble: Element): Element {
+  function isActionRowTarget(element: Element): boolean {
+    const hostButtons = Array.from(element.querySelectorAll('button')).filter(
+      (button) => !button.closest(CONTROL_SELECTOR),
+    )
+    return hostButtons.length >= 2
+  }
+
+  function findActionRowTarget(bubble: Element): Element | null {
     for (const selector of ACTION_ROW_SELECTORS) {
-      const match = bubble.querySelector(selector)
-      if (match) return match
+      if (bubble.matches(selector) && isActionRowTarget(bubble)) return bubble
+      const matches = bubble.querySelectorAll(selector)
+      for (const match of matches) {
+        if (isActionRowTarget(match)) return match
+      }
     }
 
     const classMatches = Array.from(bubble.querySelectorAll('div')).find((element) =>
       typeof element.className === 'string' &&
-      (element.className.includes('_actionsWrap_') || element.className.includes('_actions_wrap_')),
+      (element.className.includes('_actionsWrap_') || element.className.includes('_actions_wrap_')) &&
+      isActionRowTarget(element),
     )
     if (classMatches) return classMatches
 
-    const bubbleButtons = Array.from(bubble.querySelectorAll('button'))
-    for (const button of bubbleButtons) {
-      const parent = button.parentElement
-      if (!parent) continue
-      if (parent.childElementCount >= 3) {
-        return parent
-      }
-    }
-
-    return bubble
+    return null
   }
 
   function ensureControl(messageId: string, sourceElement: Element) {
@@ -2100,7 +2077,6 @@ export function setup(ctx: SpindleFrontendContext) {
     if (existingWrapper && !existingWrapper.isConnected) {
       injections.delete(messageId)
       buttons.delete(messageId)
-      menuButtons.delete(messageId)
       statusLabels.delete(messageId)
       breakoutPanels.delete(messageId)
       if (existingTarget === existingWrapper.parentElement || existingTarget?.isConnected === false) {
@@ -2108,15 +2084,16 @@ export function setup(ctx: SpindleFrontendContext) {
       }
     }
 
+    const target = findActionRowTarget(sourceElement)
+
     if (injections.has(messageId)) {
-      if (existingTarget && existingTarget !== findActionRowTarget(sourceElement)) {
+      if (!target || (existingTarget && existingTarget !== target)) {
         const wrapper = injections.get(messageId)
         if (wrapper?.isConnected) {
           ctx.dom.uninject(wrapper)
         }
         injections.delete(messageId)
         buttons.delete(messageId)
-        menuButtons.delete(messageId)
         statusLabels.delete(messageId)
         breakoutPanels.delete(messageId)
         targets.delete(messageId)
@@ -2126,12 +2103,12 @@ export function setup(ctx: SpindleFrontendContext) {
       }
     }
 
+    if (!target) return
+
     if (sourceElement.querySelector(CONTROL_SELECTOR)) {
       updateMessageVisual(messageId)
       return
     }
-
-    const target = findActionRowTarget(sourceElement)
 
     const wrapper = ctx.dom.inject(
       target,
@@ -2140,13 +2117,6 @@ export function setup(ctx: SpindleFrontendContext) {
           <button type="button" class="lummate-phase1-button" title="Play actions" aria-label="Play actions">
             <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
               <path d="M5 3.5v9l7-4.5-7-4.5Z" fill="currentColor" />
-            </svg>
-          </button>
-          <button type="button" class="lummate-phase1-menu-button" title="More actions" aria-label="More actions">
-            <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
-              <circle cx="3.5" cy="8" r="1.2" fill="currentColor" />
-              <circle cx="8" cy="8" r="1.2" fill="currentColor" />
-              <circle cx="12.5" cy="8" r="1.2" fill="currentColor" />
             </svg>
           </button>
           <span class="lummate-phase1-status" aria-hidden="true">Phase 1 ready</span>
@@ -2170,10 +2140,9 @@ export function setup(ctx: SpindleFrontendContext) {
     )
 
     const button = wrapper.querySelector('.lummate-phase1-button') as HTMLButtonElement | null
-    const menuButton = wrapper.querySelector('.lummate-phase1-menu-button') as HTMLButtonElement | null
     const status = wrapper.querySelector('.lummate-phase1-status') as HTMLElement | null
     const breakout = wrapper.querySelector('.lummate-phase1-breakout') as HTMLElement | null
-    if (!button || !menuButton || !status || !breakout) {
+    if (!button || !status || !breakout) {
       ctx.dom.uninject(wrapper)
       return
     }
@@ -2201,22 +2170,12 @@ export function setup(ctx: SpindleFrontendContext) {
       sendPlayToggle()
     })
 
-    menuButton.addEventListener('click', (event) => {
-      event.stopPropagation()
-      if (openBreakoutMessageId === messageId) {
-        closeBreakout()
-      } else {
-        openBreakout(messageId)
-        updateBreakoutModeButtons(messageId)
-      }
-    })
-
     if (supportsHover) {
-      wrapper.addEventListener('mouseenter', () => {
+      button.addEventListener('mouseenter', () => {
         scheduleBreakoutOpen(messageId)
       })
 
-      wrapper.addEventListener('mouseleave', () => {
+      button.addEventListener('mouseleave', () => {
         scheduleBreakoutClose(messageId)
       })
 
@@ -2348,7 +2307,6 @@ export function setup(ctx: SpindleFrontendContext) {
 
     injections.set(messageId, wrapper)
     buttons.set(messageId, button)
-    menuButtons.set(messageId, menuButton)
     statusLabels.set(messageId, status)
     breakoutPanels.set(messageId, breakout)
     targets.set(messageId, target)
@@ -2365,7 +2323,6 @@ export function setup(ctx: SpindleFrontendContext) {
       if (!wrapper.isConnected && !visibleMessageIds.has(messageId)) {
         injections.delete(messageId)
         buttons.delete(messageId)
-        menuButtons.delete(messageId)
         statusLabels.delete(messageId)
         breakoutPanels.delete(messageId)
         targets.delete(messageId)
@@ -2481,7 +2438,6 @@ export function setup(ctx: SpindleFrontendContext) {
 
     injections.clear()
     buttons.clear()
-    menuButtons.clear()
     statusLabels.clear()
     breakoutPanels.clear()
     targets.clear()

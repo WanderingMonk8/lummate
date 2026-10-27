@@ -121,7 +121,6 @@ function isLikelyAssistantMessage(element) {
 export function setup(ctx) {
     const injections = new Map();
     const buttons = new Map();
-    const menuButtons = new Map();
     const statusLabels = new Map();
     const breakoutPanels = new Map();
     const targets = new Map();
@@ -182,37 +181,13 @@ export function setup(ctx) {
       height: 14px;
       display: block;
     }
-    .lummate-phase1-menu-button {
-      appearance: none;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      border: 1px solid rgba(148, 163, 184, 0.18);
-      background: transparent;
-      color: rgba(191, 219, 254, 0.9);
-      border-radius: 8px;
-      width: 24px;
-      height: 24px;
-      margin-left: 4px;
-      padding: 0;
-      cursor: pointer;
-    }
-    .lummate-phase1-menu-button:hover {
-      background: rgba(30, 41, 59, 0.42);
-      border-color: rgba(148, 163, 184, 0.35);
-    }
-    .lummate-phase1-menu-button svg {
-      width: 12px;
-      height: 12px;
-      display: block;
-    }
     .lummate-phase1-status {
       display: none;
     }
     .lummate-phase1-breakout {
       position: absolute;
-      top: calc(100% + 8px);
-      right: 0;
+      bottom: calc(100% + 8px);
+      left: 0;
       min-width: 220px;
       display: none;
       flex-direction: column;
@@ -890,7 +865,7 @@ export function setup(ctx) {
             openBreakout(messageId);
             updateBreakoutModeButtons(messageId);
             hoverOpenTimer = null;
-        }, 2000);
+        }, 180);
     }
     function scheduleBreakoutClose(messageId) {
         if (hoverOpenTimer !== null) {
@@ -1781,26 +1756,26 @@ export function setup(ctx) {
         }
         return Array.from(found.entries()).map(([messageId, element]) => ({ messageId, element }));
     }
+    function isActionRowTarget(element) {
+        const hostButtons = Array.from(element.querySelectorAll('button')).filter((button) => !button.closest(CONTROL_SELECTOR));
+        return hostButtons.length >= 2;
+    }
     function findActionRowTarget(bubble) {
         for (const selector of ACTION_ROW_SELECTORS) {
-            const match = bubble.querySelector(selector);
-            if (match)
-                return match;
-        }
-        const classMatches = Array.from(bubble.querySelectorAll('div')).find((element) => typeof element.className === 'string' &&
-            (element.className.includes('_actionsWrap_') || element.className.includes('_actions_wrap_')));
-        if (classMatches)
-            return classMatches;
-        const bubbleButtons = Array.from(bubble.querySelectorAll('button'));
-        for (const button of bubbleButtons) {
-            const parent = button.parentElement;
-            if (!parent)
-                continue;
-            if (parent.childElementCount >= 3) {
-                return parent;
+            if (bubble.matches(selector) && isActionRowTarget(bubble))
+                return bubble;
+            const matches = bubble.querySelectorAll(selector);
+            for (const match of matches) {
+                if (isActionRowTarget(match))
+                    return match;
             }
         }
-        return bubble;
+        const classMatches = Array.from(bubble.querySelectorAll('div')).find((element) => typeof element.className === 'string' &&
+            (element.className.includes('_actionsWrap_') || element.className.includes('_actions_wrap_')) &&
+            isActionRowTarget(element));
+        if (classMatches)
+            return classMatches;
+        return null;
     }
     function ensureControl(messageId, sourceElement) {
         const existingWrapper = injections.get(messageId);
@@ -1808,22 +1783,21 @@ export function setup(ctx) {
         if (existingWrapper && !existingWrapper.isConnected) {
             injections.delete(messageId);
             buttons.delete(messageId);
-            menuButtons.delete(messageId);
             statusLabels.delete(messageId);
             breakoutPanels.delete(messageId);
             if (existingTarget === existingWrapper.parentElement || existingTarget?.isConnected === false) {
                 targets.delete(messageId);
             }
         }
+        const target = findActionRowTarget(sourceElement);
         if (injections.has(messageId)) {
-            if (existingTarget && existingTarget !== findActionRowTarget(sourceElement)) {
+            if (!target || (existingTarget && existingTarget !== target)) {
                 const wrapper = injections.get(messageId);
                 if (wrapper?.isConnected) {
                     ctx.dom.uninject(wrapper);
                 }
                 injections.delete(messageId);
                 buttons.delete(messageId);
-                menuButtons.delete(messageId);
                 statusLabels.delete(messageId);
                 breakoutPanels.delete(messageId);
                 targets.delete(messageId);
@@ -1833,23 +1807,17 @@ export function setup(ctx) {
                 return;
             }
         }
+        if (!target)
+            return;
         if (sourceElement.querySelector(CONTROL_SELECTOR)) {
             updateMessageVisual(messageId);
             return;
         }
-        const target = findActionRowTarget(sourceElement);
         const wrapper = ctx.dom.inject(target, `
         <div class="lummate-phase1-control">
           <button type="button" class="lummate-phase1-button" title="Play actions" aria-label="Play actions">
             <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
               <path d="M5 3.5v9l7-4.5-7-4.5Z" fill="currentColor" />
-            </svg>
-          </button>
-          <button type="button" class="lummate-phase1-menu-button" title="More actions" aria-label="More actions">
-            <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
-              <circle cx="3.5" cy="8" r="1.2" fill="currentColor" />
-              <circle cx="8" cy="8" r="1.2" fill="currentColor" />
-              <circle cx="12.5" cy="8" r="1.2" fill="currentColor" />
             </svg>
           </button>
           <span class="lummate-phase1-status" aria-hidden="true">Phase 1 ready</span>
@@ -1870,10 +1838,9 @@ export function setup(ctx) {
         </div>
       `, 'beforeend');
         const button = wrapper.querySelector('.lummate-phase1-button');
-        const menuButton = wrapper.querySelector('.lummate-phase1-menu-button');
         const status = wrapper.querySelector('.lummate-phase1-status');
         const breakout = wrapper.querySelector('.lummate-phase1-breakout');
-        if (!button || !menuButton || !status || !breakout) {
+        if (!button || !status || !breakout) {
             ctx.dom.uninject(wrapper);
             return;
         }
@@ -1897,21 +1864,11 @@ export function setup(ctx) {
             }
             sendPlayToggle();
         });
-        menuButton.addEventListener('click', (event) => {
-            event.stopPropagation();
-            if (openBreakoutMessageId === messageId) {
-                closeBreakout();
-            }
-            else {
-                openBreakout(messageId);
-                updateBreakoutModeButtons(messageId);
-            }
-        });
         if (supportsHover) {
-            wrapper.addEventListener('mouseenter', () => {
+            button.addEventListener('mouseenter', () => {
                 scheduleBreakoutOpen(messageId);
             });
-            wrapper.addEventListener('mouseleave', () => {
+            button.addEventListener('mouseleave', () => {
                 scheduleBreakoutClose(messageId);
             });
             breakout.addEventListener('mouseenter', () => {
@@ -2030,7 +1987,6 @@ export function setup(ctx) {
         });
         injections.set(messageId, wrapper);
         buttons.set(messageId, button);
-        menuButtons.set(messageId, menuButton);
         statusLabels.set(messageId, status);
         breakoutPanels.set(messageId, breakout);
         targets.set(messageId, target);
@@ -2045,7 +2001,6 @@ export function setup(ctx) {
             if (!wrapper.isConnected && !visibleMessageIds.has(messageId)) {
                 injections.delete(messageId);
                 buttons.delete(messageId);
-                menuButtons.delete(messageId);
                 statusLabels.delete(messageId);
                 breakoutPanels.delete(messageId);
                 targets.delete(messageId);
@@ -2150,7 +2105,6 @@ export function setup(ctx) {
         }
         injections.clear();
         buttons.clear();
-        menuButtons.clear();
         statusLabels.clear();
         breakoutPanels.clear();
         targets.clear();

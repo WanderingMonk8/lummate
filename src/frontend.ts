@@ -1031,6 +1031,19 @@ export function setup(ctx: SpindleFrontendContext) {
     return currentChatPreferences?.playbackMode ?? 'hold'
   }
 
+  function sendPlayToggle(messageId: string) {
+    const status = statusLabels.get(messageId)
+    if (status) status.textContent = 'Contacting backend...'
+    ctx.sendToBackend({
+      type: 'lummate.phase1.play_toggle',
+      payload: {
+        ...getActiveChatContext(),
+        messageId,
+        playbackModeOverride: getPlaybackModeForMessage(messageId),
+      },
+    })
+  }
+
   function syncActiveChat() {
     const activeChat = ctx.getActiveChat()
     const nextChatId = activeChat.chatId
@@ -2155,24 +2168,12 @@ export function setup(ctx: SpindleFrontendContext) {
     let suppressNextClick = false
     let longPressTriggered = false
 
-    const sendPlayToggle = () => {
-      status.textContent = 'Contacting backend...'
-      ctx.sendToBackend({
-        type: 'lummate.phase1.play_toggle',
-        payload: {
-          ...getActiveChatContext(),
-          messageId,
-          playbackModeOverride: getPlaybackModeForMessage(messageId),
-        },
-      })
-    }
-
     button.addEventListener('click', () => {
       if (suppressNextClick) {
         suppressNextClick = false
         return
       }
-      sendPlayToggle()
+      sendPlayToggle(messageId)
     })
 
     if (supportsHover) {
@@ -2229,7 +2230,7 @@ export function setup(ctx: SpindleFrontendContext) {
 
       suppressNextClick = true
       event.preventDefault()
-      sendPlayToggle()
+      sendPlayToggle(messageId)
     })
     button.addEventListener('touchcancel', clearLongPress)
 
@@ -2341,6 +2342,135 @@ export function setup(ctx: SpindleFrontendContext) {
     syncVisuals()
   }
 
+  let pendingContextMenuMessageId: string | null = null
+  let pendingContextMenuUntil = 0
+  const contextMenuTimers = new Set<number>()
+
+  function findNativeEditMenuItem(): HTMLElement | null {
+    const candidates = Array.from(document.body.querySelectorAll<HTMLElement>('*')).filter(
+      (element) => element.textContent?.trim() === 'Edit',
+    )
+
+    for (const candidate of candidates) {
+      let item = candidate
+      for (let depth = 0; depth < 4; depth += 1) {
+        const parent = item.parentElement
+        if (!parent || parent.textContent?.trim() !== 'Edit') break
+        item = parent
+      }
+
+      const menu = item.parentElement
+      const menuText = menu?.textContent ?? ''
+      const rect = item.getBoundingClientRect()
+      if (
+        menu &&
+        menuText.includes('Copy') &&
+        menuText.includes('Delete') &&
+        rect.width > 0 &&
+        rect.height > 0
+      ) {
+        return item
+      }
+    }
+
+    return null
+  }
+
+  function stripNativeMenuActionIdentity(element: Element) {
+    for (const attribute of element.getAttributeNames()) {
+      if (
+        attribute === 'class' ||
+        attribute === 'style' ||
+        attribute === 'role' ||
+        attribute === 'tabindex'
+      ) {
+        continue
+      }
+      element.removeAttribute(attribute)
+    }
+    for (const child of element.children) {
+      stripNativeMenuActionIdentity(child)
+    }
+  }
+
+  function injectPlayIntoNativeContextMenu() {
+    if (!pendingContextMenuMessageId || Date.now() > pendingContextMenuUntil) return
+    if (document.querySelector('[data-lummate-context-play="true"]')) return
+
+    const editItem = findNativeEditMenuItem()
+    if (!editItem?.parentElement) return
+
+    const playItem = editItem.cloneNode(true) as HTMLElement
+    stripNativeMenuActionIdentity(playItem)
+    playItem.dataset.lummateContextPlay = 'true'
+    playItem.setAttribute('aria-label', 'Play')
+    playItem.setAttribute('title', 'Play')
+
+    const textNode = Array.from(playItem.querySelectorAll<HTMLElement>('*')).find(
+      (element) => element.children.length === 0 && element.textContent?.trim() === 'Edit',
+    )
+    if (textNode) {
+      textNode.textContent = 'Play'
+    } else {
+      playItem.textContent = 'Play'
+    }
+
+    const icon = playItem.querySelector('svg')
+    if (icon) {
+      icon.setAttribute('viewBox', '0 0 16 16')
+      icon.innerHTML = '<path d="M5 3.5v9l7-4.5-7-4.5Z" fill="currentColor"></path>'
+    }
+
+    const messageId = pendingContextMenuMessageId
+    playItem.addEventListener(
+      'click',
+      (event) => {
+        event.preventDefault()
+        event.stopImmediatePropagation()
+        sendPlayToggle(messageId)
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+      },
+      true,
+    )
+    editItem.insertAdjacentElement('afterend', playItem)
+  }
+
+  function scheduleContextMenuInjection() {
+    for (const delay of [0, 40, 120]) {
+      const timer = window.setTimeout(() => {
+        contextMenuTimers.delete(timer)
+        injectPlayIntoNativeContextMenu()
+      }, delay)
+      contextMenuTimers.add(timer)
+    }
+  }
+
+  const handleContextMenu = (event: MouseEvent) => {
+    if (!(event.target instanceof Element)) return
+    const messageId = resolveMessageIdFromNode(event.target)
+    if (!messageId) return
+    pendingContextMenuMessageId = messageId
+    pendingContextMenuUntil = Date.now() + 1200
+    scheduleContextMenuInjection()
+  }
+
+  const handleOutsidePointerDown = (event: PointerEvent) => {
+    if (!openBreakoutMessageId || !(event.target instanceof Node)) return
+    const wrapper = injections.get(openBreakoutMessageId)
+    if (wrapper?.contains(event.target)) return
+    closeBreakout()
+  }
+
+  const handleDismissKey = (event: KeyboardEvent) => {
+    if (event.key === 'Escape' && openBreakoutMessageId) closeBreakout()
+  }
+
+  const contextMenuObserver = new MutationObserver(() => injectPlayIntoNativeContextMenu())
+  contextMenuObserver.observe(document.body, { childList: true, subtree: true })
+  document.addEventListener('contextmenu', handleContextMenu, true)
+  document.addEventListener('pointerdown', handleOutsidePointerDown, true)
+  document.addEventListener('keydown', handleDismissKey, true)
+
   function applyBootstrap(payload: BootstrapPayload) {
     activeChatId = payload.session.activeChatId
     activeMessageId = payload.session.activeMessageId
@@ -2425,6 +2555,12 @@ export function setup(ctx: SpindleFrontendContext) {
 
   return () => {
     window.clearInterval(scanInterval)
+    contextMenuObserver.disconnect()
+    document.removeEventListener('contextmenu', handleContextMenu, true)
+    document.removeEventListener('pointerdown', handleOutsidePointerDown, true)
+    document.removeEventListener('keydown', handleDismissKey, true)
+    for (const timer of contextMenuTimers) window.clearTimeout(timer)
+    contextMenuTimers.clear()
     unsubscribe()
     detachInputAction()
     detachTabActivate()

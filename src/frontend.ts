@@ -2097,6 +2097,24 @@ export function setup(ctx: SpindleFrontendContext) {
     return null
   }
 
+  function getMessageControls(messageId: string): HTMLElement[] {
+    return Array.from(document.querySelectorAll<HTMLElement>(CONTROL_SELECTOR)).filter(
+      (control) => control.dataset.lummateMessageId === messageId,
+    )
+  }
+
+  function getControlFromWrapper(wrapper: Element | null | undefined): HTMLElement | null {
+    if (!wrapper) return null
+    if (wrapper.matches(CONTROL_SELECTOR)) return wrapper as HTMLElement
+    return wrapper.querySelector<HTMLElement>(CONTROL_SELECTOR)
+  }
+
+  function removeDuplicateControls(messageId: string, canonicalControl: Element | null) {
+    for (const control of getMessageControls(messageId)) {
+      if (control !== canonicalControl) control.remove()
+    }
+  }
+
   function ensureControl(messageId: string, sourceElement: Element) {
     const existingWrapper = injections.get(messageId)
     const existingTarget = targets.get(messageId)
@@ -2112,6 +2130,9 @@ export function setup(ctx: SpindleFrontendContext) {
     }
 
     const target = findActionRowTarget(sourceElement)
+
+    const canonicalControl = getControlFromWrapper(existingWrapper)
+    removeDuplicateControls(messageId, canonicalControl)
 
     if (injections.has(messageId)) {
       if (!target || (existingTarget && existingTarget !== target)) {
@@ -2132,9 +2153,10 @@ export function setup(ctx: SpindleFrontendContext) {
 
     if (!target) return
 
-    if (sourceElement.querySelector(CONTROL_SELECTOR)) {
-      updateMessageVisual(messageId)
-      return
+    // Untagged controls are remnants from an older render and cannot be safely
+    // adopted because their listeners belong to a stale extension instance.
+    for (const staleControl of target.querySelectorAll(CONTROL_SELECTOR)) {
+      staleControl.remove()
     }
 
     const wrapper = ctx.dom.inject(
@@ -2173,6 +2195,14 @@ export function setup(ctx: SpindleFrontendContext) {
       ctx.dom.uninject(wrapper)
       return
     }
+
+    const control = getControlFromWrapper(wrapper)
+    if (!control) {
+      ctx.dom.uninject(wrapper)
+      return
+    }
+    control.dataset.lummateMessageId = messageId
+    removeDuplicateControls(messageId, control)
 
     let suppressNextClick = false
     let longPressTriggered = false
@@ -2346,6 +2376,10 @@ export function setup(ctx: SpindleFrontendContext) {
 
     for (const message of visibleMessages) {
       ensureControl(message.messageId, message.element)
+    }
+
+    for (const [messageId, wrapper] of injections.entries()) {
+      removeDuplicateControls(messageId, getControlFromWrapper(wrapper))
     }
 
     syncVisuals()

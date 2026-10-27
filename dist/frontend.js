@@ -1808,6 +1808,22 @@ export function setup(ctx) {
             return structuralMatch;
         return null;
     }
+    function getMessageControls(messageId) {
+        return Array.from(document.querySelectorAll(CONTROL_SELECTOR)).filter((control) => control.dataset.lummateMessageId === messageId);
+    }
+    function getControlFromWrapper(wrapper) {
+        if (!wrapper)
+            return null;
+        if (wrapper.matches(CONTROL_SELECTOR))
+            return wrapper;
+        return wrapper.querySelector(CONTROL_SELECTOR);
+    }
+    function removeDuplicateControls(messageId, canonicalControl) {
+        for (const control of getMessageControls(messageId)) {
+            if (control !== canonicalControl)
+                control.remove();
+        }
+    }
     function ensureControl(messageId, sourceElement) {
         const existingWrapper = injections.get(messageId);
         const existingTarget = targets.get(messageId);
@@ -1821,6 +1837,8 @@ export function setup(ctx) {
             }
         }
         const target = findActionRowTarget(sourceElement);
+        const canonicalControl = getControlFromWrapper(existingWrapper);
+        removeDuplicateControls(messageId, canonicalControl);
         if (injections.has(messageId)) {
             if (!target || (existingTarget && existingTarget !== target)) {
                 const wrapper = injections.get(messageId);
@@ -1840,9 +1858,10 @@ export function setup(ctx) {
         }
         if (!target)
             return;
-        if (sourceElement.querySelector(CONTROL_SELECTOR)) {
-            updateMessageVisual(messageId);
-            return;
+        // Untagged controls are remnants from an older render and cannot be safely
+        // adopted because their listeners belong to a stale extension instance.
+        for (const staleControl of target.querySelectorAll(CONTROL_SELECTOR)) {
+            staleControl.remove();
         }
         const wrapper = ctx.dom.inject(target, `
         <div class="lummate-phase1-control">
@@ -1875,6 +1894,13 @@ export function setup(ctx) {
             ctx.dom.uninject(wrapper);
             return;
         }
+        const control = getControlFromWrapper(wrapper);
+        if (!control) {
+            ctx.dom.uninject(wrapper);
+            return;
+        }
+        control.dataset.lummateMessageId = messageId;
+        removeDuplicateControls(messageId, control);
         let suppressNextClick = false;
         let longPressTriggered = false;
         button.addEventListener('click', () => {
@@ -2028,6 +2054,9 @@ export function setup(ctx) {
         }
         for (const message of visibleMessages) {
             ensureControl(message.messageId, message.element);
+        }
+        for (const [messageId, wrapper] of injections.entries()) {
+            removeDuplicateControls(messageId, getControlFromWrapper(wrapper));
         }
         syncVisuals();
     }

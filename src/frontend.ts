@@ -2346,16 +2346,16 @@ export function setup(ctx: SpindleFrontendContext) {
   let pendingContextMenuUntil = 0
   const contextMenuTimers = new Set<number>()
 
-  function findNativeEditMenuItem(): HTMLElement | null {
+  function findNativeMenuItem(label: string): HTMLElement | null {
     const candidates = Array.from(document.body.querySelectorAll<HTMLElement>('*')).filter(
-      (element) => element.textContent?.trim() === 'Edit',
+      (element) => element.textContent?.trim() === label,
     )
 
     for (const candidate of candidates) {
       let item = candidate
       for (let depth = 0; depth < 4; depth += 1) {
         const parent = item.parentElement
-        if (!parent || parent.textContent?.trim() !== 'Edit') break
+        if (!parent || parent.textContent?.trim() !== label) break
         item = parent
       }
 
@@ -2397,29 +2397,15 @@ export function setup(ctx: SpindleFrontendContext) {
     if (!pendingContextMenuMessageId || Date.now() > pendingContextMenuUntil) return
     if (document.querySelector('[data-lummate-context-play="true"]')) return
 
-    const editItem = findNativeEditMenuItem()
-    if (!editItem?.parentElement) return
+    const generateImageItem = findNativeMenuItem('Generate image')
+    if (!generateImageItem?.parentElement) return
 
-    const playItem = editItem.cloneNode(true) as HTMLElement
+    const playItem = generateImageItem.cloneNode(false) as HTMLElement
     stripNativeMenuActionIdentity(playItem)
     playItem.dataset.lummateContextPlay = 'true'
-    playItem.setAttribute('aria-label', 'Play')
-    playItem.setAttribute('title', 'Play')
-
-    const textNode = Array.from(playItem.querySelectorAll<HTMLElement>('*')).find(
-      (element) => element.children.length === 0 && element.textContent?.trim() === 'Edit',
-    )
-    if (textNode) {
-      textNode.textContent = 'Play'
-    } else {
-      playItem.textContent = 'Play'
-    }
-
-    const icon = playItem.querySelector('svg')
-    if (icon) {
-      icon.setAttribute('viewBox', '0 0 16 16')
-      icon.innerHTML = '<path d="M5 3.5v9l7-4.5-7-4.5Z" fill="currentColor"></path>'
-    }
+    playItem.setAttribute('aria-label', 'Play actions')
+    playItem.setAttribute('title', 'Play actions')
+    playItem.textContent = 'Play actions'
 
     const messageId = pendingContextMenuMessageId
     playItem.addEventListener(
@@ -2432,7 +2418,7 @@ export function setup(ctx: SpindleFrontendContext) {
       },
       true,
     )
-    editItem.insertAdjacentElement('afterend', playItem)
+    generateImageItem.insertAdjacentElement('beforebegin', playItem)
   }
 
   function scheduleContextMenuInjection() {

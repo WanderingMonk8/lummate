@@ -182,6 +182,9 @@ export function setup(ctx: SpindleFrontendContext) {
   let draftSettings: UserSettings | null = null
   let settingsStatus = 'Loading settings...'
   let settingsSaveInFlight = false
+  let settingsSaveTimer: number | null = null
+  let settingsRevision = 0
+  let settingsSaveRevision = 0
   const playbackModeOverrides = new Map<string, PlaybackMode>()
   let longPressTimer: number | null = null
   let hoverOpenTimer: number | null = null
@@ -441,21 +444,6 @@ export function setup(ctx: SpindleFrontendContext) {
       padding: 6px 10px;
       font-size: 12px;
       cursor: pointer;
-    }
-    .lummate-settings-save {
-      appearance: none;
-      border: 1px solid rgba(34, 197, 94, 0.4);
-      background: rgba(22, 163, 74, 0.18);
-      color: #dcfce7;
-      border-radius: 10px;
-      padding: 8px 14px;
-      font-size: 13px;
-      font-weight: 600;
-      cursor: pointer;
-    }
-    .lummate-settings-save:disabled {
-      opacity: 0.6;
-      cursor: default;
     }
     .lummate-settings-status {
       font-size: 12px;
@@ -1140,7 +1128,9 @@ export function setup(ctx: SpindleFrontendContext) {
 
   function setSettingsStatus(nextStatus: string) {
     settingsStatus = nextStatus
-    renderSettingsTab()
+    const status = settingsTab.root.querySelector('.lummate-settings-status')
+    if (status) status.textContent = nextStatus
+    if (nextStatus === 'Unsaved changes') scheduleSettingsSave()
   }
 
   function clearSettingsComponents() {
@@ -1170,9 +1160,19 @@ export function setup(ctx: SpindleFrontendContext) {
     )
   }
 
+  function scheduleSettingsSave() {
+    settingsRevision += 1
+    if (settingsSaveTimer !== null) window.clearTimeout(settingsSaveTimer)
+    settingsSaveTimer = window.setTimeout(() => {
+      settingsSaveTimer = null
+      sendSettingsSave()
+    }, 500)
+  }
+
   function sendSettingsSave() {
     if (!draftSettings || settingsSaveInFlight) return
     settingsSaveInFlight = true
+    settingsSaveRevision = settingsRevision
     setSettingsStatus('Saving settings...')
     ctx.sendToBackend({
       type: 'lummate.settings.save',
@@ -1450,6 +1450,7 @@ export function setup(ctx: SpindleFrontendContext) {
           draftSettings.parser.primaryUserContactZone = value as UserContactZone
           setSettingsStatus('Unsaved changes')
           updateDebugIndicator()
+          renderSettingsTab()
         },
       }),
     )
@@ -1950,14 +1951,6 @@ export function setup(ctx: SpindleFrontendContext) {
 
     const actions = document.createElement('div')
     actions.className = 'lummate-settings-actions'
-
-    const saveButton = document.createElement('button')
-    saveButton.type = 'button'
-    saveButton.className = 'lummate-settings-save'
-    saveButton.textContent = settingsSaveInFlight ? 'Saving...' : 'Save settings'
-    saveButton.disabled = settingsSaveInFlight
-    saveButton.addEventListener('click', sendSettingsSave)
-    actions.appendChild(saveButton)
 
     const status = document.createElement('div')
     status.className = 'lummate-settings-status'
@@ -2503,14 +2496,30 @@ export function setup(ctx: SpindleFrontendContext) {
     settingsPayload = payload
     participantProfiles = payload.participantProfiles
     currentChatPreferences = payload.chatPreferences
-    draftSettings = cloneSettings(payload.settings)
     settingsSaveInFlight = false
-    settingsStatus = saved ? 'Settings saved' : 'Settings loaded'
+
+    if (!saved) {
+      draftSettings = cloneSettings(payload.settings)
+      settingsRevision = 0
+      settingsSaveRevision = 0
+      settingsStatus = 'Settings loaded'
+    } else if (settingsRevision === settingsSaveRevision) {
+      settingsStatus = 'Settings saved'
+    } else {
+      settingsStatus = 'Saving latest changes...'
+      sendSettingsSave()
+    }
+
     updateDebugIndicator()
     for (const messageId of breakoutPanels.keys()) {
       updateBreakoutTrackingButtons(messageId)
     }
-    renderSettingsTab()
+    if (saved) {
+      const status = settingsTab.root.querySelector('.lummate-settings-status')
+      if (status) status.textContent = settingsStatus
+    } else {
+      renderSettingsTab()
+    }
   }
 
   const unsubscribe = ctx.onBackendMessage((payload) => {
@@ -2566,6 +2575,7 @@ export function setup(ctx: SpindleFrontendContext) {
 
   return () => {
     window.clearInterval(scanInterval)
+    if (settingsSaveTimer !== null) window.clearTimeout(settingsSaveTimer)
     contextMenuObserver.disconnect()
     document.removeEventListener('contextmenu', handleContextMenu, true)
     document.removeEventListener('pointerdown', handleOutsidePointerDown, true)

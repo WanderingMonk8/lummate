@@ -2057,6 +2057,21 @@ export function setup(ctx: SpindleFrontendContext) {
     )
     if (classMatches) return classMatches
 
+    const hostControls = Array.from(
+      bubble.querySelectorAll('button, [role="button"]'),
+    ).filter((element) => !element.closest(CONTROL_SELECTOR))
+    const parentCounts = new Map<Element, number>()
+    for (const control of hostControls) {
+      const parent = control.parentElement
+      if (!parent || parent === bubble) continue
+      parentCounts.set(parent, (parentCounts.get(parent) ?? 0) + 1)
+    }
+
+    const structuralMatch = Array.from(parentCounts.entries())
+      .filter(([, controlCount]) => controlCount >= 3)
+      .sort((left, right) => right[1] - left[1])[0]?.[0]
+    if (structuralMatch) return structuralMatch
+
     return null
   }
 
